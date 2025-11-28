@@ -23,7 +23,7 @@ from .utils.policy import Policy
 
 
 class Controller:
-    def __init__(self, cfg_file) -> None:
+    def __init__(self, cfg_file, motion_file) -> None:
         # Setup logging
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ class Controller:
 
         # Initialize components
         self.remoteControlService = RemoteControlService()
-        self.policy = Policy(cfg=self.cfg)
+        self.policy = Policy(cfg=self.cfg, motion_file_path=motion_file)
 
         self._init_timer()
         self._init_low_state_values()
@@ -51,6 +51,8 @@ class Controller:
 
     def _init_low_state_values(self):
         self.base_ang_vel = np.zeros(3, dtype=np.float32)
+        self.base_lin_vel = np.zeros(3, dtype=np.float32)
+        self.base_quat = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
         self.projected_gravity = np.zeros(3, dtype=np.float32)
         self.dof_pos = np.zeros(B1JointCnt, dtype=np.float32)
         self.dof_vel = np.zeros(B1JointCnt, dtype=np.float32)
@@ -96,6 +98,13 @@ class Controller:
                 np.array([0.0, 0.0, -1.0]),
             )
             self.base_ang_vel[:] = low_state_msg.imu_state.gyro
+            self.base_quat[:] = low_state_msg.imu_state.quaternion
+
+            # Note: If IMU doesn't provide linear velocity directly, integrate accelerometer
+            # For now, we use the field if available, otherwise default to zeros
+            if hasattr(low_state_msg.imu_state, 'velocity'):
+                self.base_lin_vel[:] = low_state_msg.imu_state.velocity
+
             for i, motor in enumerate(low_state_msg.motor_state_serial):
                 self.dof_pos[i] = motor.q
                 self.dof_vel[i] = motor.dq
@@ -163,11 +172,9 @@ class Controller:
             time_now=time_now,
             dof_pos=self.dof_pos,
             dof_vel=self.dof_vel,
+            base_lin_vel=self.base_lin_vel,
             base_ang_vel=self.base_ang_vel,
-            projected_gravity=self.projected_gravity,
-            vx=self.remoteControlService.get_vx_cmd(),
-            vy=self.remoteControlService.get_vy_cmd(),
-            vyaw=self.remoteControlService.get_vyaw_cmd(),
+            base_quat=self.base_quat,
         )
 
         inference_time = time.perf_counter()
@@ -236,6 +243,12 @@ if __name__ == "__main__":
         "--config", required=True, type=str, help="Name of the configuration file."
     )
     parser.add_argument(
+        "--motion",
+        required=True,
+        type=str,
+        help="Path to motion file (.npz) for tracking",
+    )
+    parser.add_argument(
         "--net",
         type=str,
         default="127.0.0.1",
@@ -245,9 +258,10 @@ if __name__ == "__main__":
     cfg_file = os.path.join("configs", args.config)
 
     print(f"Starting custom controller, connecting to {args.net} ...")
+    print(f"Loading motion file: {args.motion}")
     ChannelFactory.Instance().Init(0, args.net)
 
-    with Controller(cfg_file) as controller:
+    with Controller(cfg_file, args.motion) as controller:
         time.sleep(2)  # Wait for channels to initialize
         print("Initialization complete.")
         controller.start_custom_mode_conditionally()

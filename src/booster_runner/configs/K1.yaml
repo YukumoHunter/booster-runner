@@ -39,10 +39,11 @@ common:
   ]
 
 policy:
-  policy_path: "./models/K1.pt"
-  num_actions: 12
-  num_observations: 47
-  gait_frequency: 1
+  policy_path: "./models/K1_tracking.pt"
+  num_actions: 22
+  num_observations: 125
+  motion_file: ""  # Set via --motion command-line argument
+  anchor_body_index: 0  # Trunk body
 
   normalization:
     gravity: 1.0
@@ -51,8 +52,7 @@ policy:
     dof_pos: 1.0
     dof_vel: 0.1
     clip_actions: 1.
-  # Action scale
-  # {'Head_.*': 0.177312071384227, '.*_Shoulder_.*': 0.2533029591203243, '.*_Elbow_.*': 0.2533029591203243, '.*_Hip_Pitch': 0.7599088773609728, '.*_Hip_Roll': 0.5066059182406486, '.*_Hip_Yaw': 0.5066059182406486, '.*_Knee_Pitch': 1.0132118364812972, '.*_Ankle_Pitch': 0.5066059182406486, '.*_Ankle_Roll': 0.3799544386804864}
+
   control:
     action_scales: [
       0.18, 0.18,
