@@ -1,0 +1,90 @@
+# [DelayedActuatorCfg(joint_names_expr=('Head_.*',), armature=0.0, frictionloss=0.0, base_cfg=BuiltinPositionActuatorCfg(joint_names_expr=('Head_.*',), armature=0.01, frictionloss=0.0, stiffness=39.478417602100684, damping=2.5132741228, effort_limit=7.0), delay_target='position', delay_min_lag=2, delay_max_lag=10, delay_hold_prob=0.3, delay_update_period=0, delay_per_env_phase=True), DelayedActuatorCfg(joint_names_expr=('.*_Shoulder_.*', '.*_Elbow_.*'), armature=0.0, frictionloss=0.0, base_cfg=BuiltinPositionActuatorCfg(joint_names_expr=('.*_Shoulder_.*', '.*_Elbow_.*'), armature=0.01, frictionloss=0.0, stiffness=39.478417602100684, damping=2.5132741228, effort_limit=10.0), delay_target='position', delay_min_lag=2, delay_max_lag=10, delay_hold_prob=0.3, delay_update_period=0, delay_per_env_phase=True), DelayedActuatorCfg(joint_names_expr=('.*_Hip_Pitch',), armature=0.0, frictionloss=0.0, base_cfg=BuiltinPositionActuatorCfg(joint_names_expr=('.*_Hip_Pitch',), armature=0.01, frictionloss=0.0, stiffness=39.478417602100684, damping=2.5132741228, effort_limit=30.0), delay_target='position', delay_min_lag=2, delay_max_lag=10, delay_hold_prob=0.3, delay_update_period=0, delay_per_env_phase=True), DelayedActuatorCfg(joint_names_expr=('.*_Hip_Roll', '.*_Hip_Yaw'), armature=0.0, frictionloss=0.0, base_cfg=BuiltinPositionActuatorCfg(joint_names_expr=('.*_Hip_Roll', '.*_Hip_Yaw'), armature=0.01, frictionloss=0.0, stiffness=39.478417602100684, damping=2.5132741228, effort_limit=20.0), delay_target='position', delay_min_lag=2, delay_max_lag=10, delay_hold_prob=0.3, delay_update_period=0, delay_per_env_phase=True), DelayedActuatorCfg(joint_names_expr=('.*_Knee_Pitch',), armature=0.0, frictionloss=0.0, base_cfg=BuiltinPositionActuatorCfg(joint_names_expr=('.*_Knee_Pitch',), armature=0.01, frictionloss=0.0, stiffness=39.478417602100684, damping=2.5132741228, effort_limit=40.0), delay_target='position', delay_min_lag=2, delay_max_lag=10, delay_hold_prob=0.3, delay_update_period=0, delay_per_env_phase=True), DelayedActuatorCfg(joint_names_expr=('.*_Ankle_Pitch',), armature=0.0, frictionloss=0.0, base_cfg=BuiltinPositionActuatorCfg(joint_names_expr=('.*_Ankle_Pitch',), armature=0.01, frictionloss=0.0, stiffness=39.478417602100684, damping=2.5132741228, effort_limit=20.0), delay_target='position', delay_min_lag=2, delay_max_lag=10, delay_hold_prob=0.3, delay_update_period=0, delay_per_env_phase=True), DelayedActuatorCfg(joint_names_expr=('.*_Ankle_Roll',), armature=0.0, frictionloss=0.0, base_cfg=BuiltinPositionActuatorCfg(joint_names_expr=('.*_Ankle_Roll',), armature=0.01, frictionloss=0.0, stiffness=39.478417602100684, damping=2.5132741228, effort_limit=15.0), delay_target='position', delay_min_lag=2, delay_max_lag=10, delay_hold_prob=0.3, delay_update_period=0, delay_per_env_phase=True)]
+
+common:
+  dt: 0.005
+  stiffness: [ 
+    40, 40,
+    40, 40, 40, 40,
+    40, 40, 40, 40,
+    40, 40, 40, 40, 40, 40,
+    40, 40, 40, 40, 40, 40
+  ]
+  damping: [
+    2.5, 2.5,
+    2.5, 2.5, 2.5, 2.5,
+    2.5, 2.5, 2.5, 2.5,
+    2.5, 2.5, 2.5, 2.5, 2.5, 2.5,
+    2.5, 2.5, 2.5, 2.5, 2.5, 2.5
+  ]
+  # Joint order:
+  #
+  # 'Head_Yaw', 'Head_Pitch',
+  # 'Left_Shoulder_Pitch', 'Left_Shoulder_Roll', 'Left_Elbow_Pitch', 'Left_Elbow_Yaw',
+  # 'Right_Shoulder_Pitch', 'Right_Shoulder_Roll', 'Right_Elbow_Pitch', 'Right_Elbow_Yaw',
+  # 'Left_Hip_Pitch', 'Left_Hip_Roll', 'Left_Hip_Yaw', 'Left_Knee_Pitch', 'Left_Ankle_Pitch', 'Left_Ankle_Roll',
+  # 'Right_Hip_Pitch', 'Right_Hip_Roll', 'Right_Hip_Yaw', 'Right_Knee_Pitch', 'Right_Ankle_Pitch', 'Right_Ankle_Roll'
+  default_qpos: [
+    0.0,  0.0,
+    0.0, -1.4, 0.0, -0.4,
+    0.0, 1.4, 0.0, 0.4,
+    -0.2, 0.0, 0.0, 0.4, -0.2, 0.0,
+    -0.2, 0.0, 0.0, 0.4, -0.2, 0.0,
+  ]
+  torque_limit: [
+    7, 7,
+    10, 10, 10, 10,
+    10, 10, 10, 10,
+    30, 20, 20, 40, 20, 15,
+    30, 20, 20, 40, 20, 15,
+  ]
+
+policy:
+  policy_path: "./models/K1.pt"
+  num_actions: 12
+  num_observations: 47
+  gait_frequency: 1
+
+  normalization:
+    gravity: 1.0
+    lin_vel: 1.0
+    ang_vel: 1.0
+    dof_pos: 1.0
+    dof_vel: 0.1
+    clip_actions: 1.
+  # Action scale
+  # {'Head_.*': 0.177312071384227, '.*_Shoulder_.*': 0.2533029591203243, '.*_Elbow_.*': 0.2533029591203243, '.*_Hip_Pitch': 0.7599088773609728, '.*_Hip_Roll': 0.5066059182406486, '.*_Hip_Yaw': 0.5066059182406486, '.*_Knee_Pitch': 1.0132118364812972, '.*_Ankle_Pitch': 0.5066059182406486, '.*_Ankle_Roll': 0.3799544386804864}
+  control:
+    action_scales: [
+      0.18, 0.18,
+      0.25, 0.25, 0.25, 0.25,
+      0.25, 0.25, 0.25, 0.25,
+      0.76, 0.51, 0.51, 1.01, 0.51, 0.38,
+      0.76, 0.51, 0.51, 1.01, 0.51, 0.38,
+    ]
+    decimation: 4
+
+mech:
+  parallel_mech_indexes: [15, 16, 20, 21]
+
+prepare:
+  stiffness: [ 
+    40, 40,
+    40, 40, 40, 40,
+    40, 40, 40, 40,
+    40, 40, 40, 40, 40, 40,
+    40, 40, 40, 40, 40, 40
+  ]
+  damping: [
+    2.5, 2.5,
+    2.5, 2.5, 2.5, 2.5,
+    2.5, 2.5, 2.5, 2.5,
+    2.5, 2.5, 2.5, 2.5, 2.5, 2.5,
+    2.5, 2.5, 2.5, 2.5, 2.5, 2.5
+  ]
+  default_qpos: [
+    0.0,  0.0,
+    0.0, -1.4, 0.0, -0.4,
+    0.0, 1.4, 0.0, 0.4,
+    -0.2, 0.0, 0.0, 0.4, -0.2, 0.0,
+    -0.2, 0.0, 0.0, 0.4, -0.2, 0.0,
+  ]
