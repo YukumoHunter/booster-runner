@@ -13,21 +13,22 @@ from .rotate import (
 
 
 class Policy:
-    def __init__(self, cfg, motion_file_path):
+    def __init__(self, cfg, motion_file_path, playback_fps=None):
         self.cfg = cfg
+        self.playback_fps = playback_fps
         policy_path = self.cfg["policy"]["policy_path"]
 
         # Detect model type from file extension
-        if policy_path.endswith('.onnx'):
-            self.model_type = 'onnx'
+        if policy_path.endswith(".onnx"):
+            self.model_type = "onnx"
             try:
                 self.onnx_session = onnxruntime.InferenceSession(policy_path)
                 print(f"Loaded ONNX model from {policy_path}")
             except Exception as e:
                 print(f"Failed to load ONNX model: {e}")
                 raise
-        elif policy_path.endswith('.pt'):
-            self.model_type = 'torchscript'
+        elif policy_path.endswith(".pt"):
+            self.model_type = "torchscript"
             try:
                 self.policy = torch.jit.load(policy_path)
                 self.policy.eval()
@@ -36,7 +37,9 @@ class Policy:
                 print(f"Failed to load TorchScript model: {e}")
                 raise
         else:
-            raise ValueError(f"Unknown model type for {policy_path}. Expected .onnx or .pt")
+            raise ValueError(
+                f"Unknown model type for {policy_path}. Expected .onnx or .pt"
+            )
 
         # Initialize motion player (required for both model types)
         anchor_body_index = self.cfg["policy"]["anchor_body_index"]
@@ -64,16 +67,24 @@ class Policy:
         self.dof_targets = np.copy(self.default_dof_pos)
         self.obs = np.zeros(self.cfg["policy"]["num_observations"], dtype=np.float32)
         self.actions = np.zeros(self.cfg["policy"]["num_actions"], dtype=np.float32)
-        self.policy_interval = (
-            self.cfg["common"]["dt"] * self.cfg["policy"]["control"]["decimation"]
-        )
+
+        # Use custom playback FPS if provided, otherwise use policy decimation
+        if self.playback_fps is not None:
+            self.policy_interval = 1.0 / self.playback_fps
+            print(
+                f"Using custom playback interval: {self.policy_interval:.4f}s ({self.playback_fps} FPS)"
+            )
+        else:
+            self.policy_interval = (
+                self.cfg["common"]["dt"] * self.cfg["policy"]["control"]["decimation"]
+            )
 
         # Motion anchor tracking variables
         self.motion_anchor_quat = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
         self.motion_anchor_pos = np.zeros(3, dtype=np.float32)
 
         # ONNX-specific output storage (for future use)
-        if self.model_type == 'onnx':
+        if self.model_type == "onnx":
             self.last_joint_pos = np.zeros(22, dtype=np.float32)
             self.last_joint_vel = np.zeros(22, dtype=np.float32)
             self.last_body_pos_w = np.zeros((25, 3), dtype=np.float32)
@@ -130,14 +141,12 @@ class Policy:
         self.obs[53:56] = base_lin_vel * self.cfg["policy"]["normalization"]["lin_vel"]
 
         # 56:59 - base_ang_vel
-        self.obs[56:59] = (
-            base_ang_vel * self.cfg["policy"]["normalization"]["ang_vel"]
-        )
+        self.obs[56:59] = base_ang_vel * self.cfg["policy"]["normalization"]["ang_vel"]
 
         # 59:81 - joint_pos (relative to default positions, all 22 joints)
-        self.obs[59:81] = (
-            dof_pos - self.default_dof_pos
-        ) * self.cfg["policy"]["normalization"]["dof_pos"]
+        self.obs[59:81] = (dof_pos - self.default_dof_pos) * self.cfg["policy"][
+            "normalization"
+        ]["dof_pos"]
 
         # 81:103 - joint_vel (all 22 joints)
         self.obs[81:103] = dof_vel * self.cfg["policy"]["normalization"]["dof_vel"]
@@ -146,7 +155,7 @@ class Policy:
         self.obs[103:125] = self.actions
 
         # Run policy inference
-        if self.model_type == 'torchscript':
+        if self.model_type == "torchscript":
             # TorchScript inference
             self.actions[:] = (
                 self.policy(torch.from_numpy(self.obs).unsqueeze(0)).detach().numpy()
@@ -154,14 +163,23 @@ class Policy:
         else:  # onnx
             # ONNX inference
             onnx_inputs = {
-                'obs': self.obs.reshape(1, -1).astype(np.float32),
-                'time_step': np.array([[self.motion_player._frame_idx]], dtype=np.float32)
+                "obs": self.obs.reshape(1, -1).astype(np.float32),
+                "time_step": np.array(
+                    [[self.motion_player._frame_idx]], dtype=np.float32
+                ),
             }
 
             results = self.onnx_session.run(
-                output_names=['actions', 'joint_pos', 'joint_vel', 'body_pos_w',
-                              'body_quat_w', 'body_lin_vel_w', 'body_ang_vel_w'],
-                input_feed=onnx_inputs
+                output_names=[
+                    "actions",
+                    "joint_pos",
+                    "joint_vel",
+                    "body_pos_w",
+                    "body_quat_w",
+                    "body_lin_vel_w",
+                    "body_ang_vel_w",
+                ],
+                input_feed=onnx_inputs,
             )
 
             # Extract actions (first output)
@@ -190,6 +208,20 @@ class Policy:
 
         return self.dof_targets
 
+    def get_reference_motion(self) -> np.ndarray:
+        """Get reference motion directly without running policy inference.
+
+        Returns:
+            Target joint positions from reference motion (22 dims)
+        """
+        # Get motion command from MotionPlayer (44 dims: 22 pos + 22 vel)
+        motion_command, _ = self.motion_player.step(self.policy_interval)
+
+        # Extract joint positions (first 22 elements)
+        reference_joint_pos = motion_command[:22]
+
+        return reference_joint_pos
+
     def get_onnx_outputs(self):
         """Return last ONNX inference outputs for debugging/logging.
 
@@ -197,13 +229,13 @@ class Policy:
             dict or None: Dictionary containing ONNX outputs if using ONNX model,
                          None if using TorchScript model.
         """
-        if self.model_type != 'onnx':
+        if self.model_type != "onnx":
             return None
         return {
-            'joint_pos': self.last_joint_pos.copy(),
-            'joint_vel': self.last_joint_vel.copy(),
-            'body_pos_w': self.last_body_pos_w.copy(),
-            'body_quat_w': self.last_body_quat_w.copy(),
-            'body_lin_vel_w': self.last_body_lin_vel_w.copy(),
-            'body_ang_vel_w': self.last_body_ang_vel_w.copy(),
+            "joint_pos": self.last_joint_pos.copy(),
+            "joint_vel": self.last_joint_vel.copy(),
+            "body_pos_w": self.last_body_pos_w.copy(),
+            "body_quat_w": self.last_body_quat_w.copy(),
+            "body_lin_vel_w": self.last_body_lin_vel_w.copy(),
+            "body_ang_vel_w": self.last_body_ang_vel_w.copy(),
         }

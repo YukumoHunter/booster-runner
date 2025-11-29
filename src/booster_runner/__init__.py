@@ -23,7 +23,7 @@ from .utils.policy import Policy
 
 
 class Controller:
-    def __init__(self, cfg_file, motion_file) -> None:
+    def __init__(self, cfg_file, motion_file, playback_only=False, playback_fps=None) -> None:
         # Setup logging
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
@@ -34,7 +34,9 @@ class Controller:
 
         # Initialize components
         self.remoteControlService = RemoteControlService()
-        self.policy = Policy(cfg=self.cfg, motion_file_path=motion_file)
+        self.policy = Policy(cfg=self.cfg, motion_file_path=motion_file, playback_fps=playback_fps)
+        self.playback_only = playback_only
+        self.playback_fps = playback_fps
 
         self._init_timer()
         self._init_low_state_values()
@@ -186,18 +188,23 @@ class Controller:
         self.logger.debug(f"Next start time: {self.next_inference_time}")
         start_time = time.perf_counter()
 
-        self.dof_target[:] = self.policy.inference(
-            time_now=time_now,
-            dof_pos=self.dof_pos,
-            dof_vel=self.dof_vel,
-            base_lin_vel=self.base_lin_vel,
-            base_ang_vel=self.base_ang_vel,
-            base_quat=self.base_quat,
-        )
+        if self.playback_only:
+            # Playback mode: use reference motion directly without inference
+            self.dof_target[:] = self.policy.get_reference_motion()
+        else:
+            # Normal mode: run policy inference
+            self.dof_target[:] = self.policy.inference(
+                time_now=time_now,
+                dof_pos=self.dof_pos,
+                dof_vel=self.dof_vel,
+                base_lin_vel=self.base_lin_vel,
+                base_ang_vel=self.base_ang_vel,
+                base_quat=self.base_quat,
+            )
 
         inference_time = time.perf_counter()
         self.logger.debug(
-            f"Inference took {(inference_time - start_time) * 1000:.4f} ms"
+            f"{'Playback' if self.playback_only else 'Inference'} took {(inference_time - start_time) * 1000:.4f} ms"
         )
         time.sleep(0.001)
 
@@ -276,6 +283,17 @@ def main():
         default="127.0.0.1",
         help="Network interface for SDK communication.",
     )
+    parser.add_argument(
+        "--playback-only",
+        action="store_true",
+        help="Play back reference motion without running policy inference.",
+    )
+    parser.add_argument(
+        "--playback-fps",
+        type=float,
+        default=None,
+        help="Playback frames per second (overrides motion file FPS and policy rate).",
+    )
     args = parser.parse_args()
     cfg_file = os.path.join("configs", args.config)
 
@@ -283,8 +301,13 @@ def main():
     print(f"Loading motion file: {args.motion}")
     ChannelFactory.Instance().Init(0, args.net)
 
+    if args.playback_only:
+        print("Running in PLAYBACK-ONLY mode (no policy inference)")
+    if args.playback_fps is not None:
+        print(f"Using custom playback FPS: {args.playback_fps}")
+
     try:
-        with Controller(cfg_file, args.motion) as controller:
+        with Controller(cfg_file, args.motion, playback_only=args.playback_only, playback_fps=args.playback_fps) as controller:
             time.sleep(2)  # Wait for channels to initialize
             print("Initialization complete.")
             controller.start_custom_mode_conditionally()
