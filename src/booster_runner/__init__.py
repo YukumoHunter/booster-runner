@@ -16,10 +16,12 @@ from booster_robotics_sdk_python import (
 )
 
 from .utils.command import create_prepare_cmd, create_first_frame_rl_cmd
-from .utils.remote_control_service import RemoteControlService
-from .utils.rotate import rotate_vector_inverse_rpy
-from .utils.timer import TimerConfig, Timer
+from .utils.orientation_filter import OrientationFilter
 from .utils.policy import Policy
+from .utils.remote_control_service import RemoteControlService
+from .utils.rerun_logger import OrientationRerunLogger
+from .utils.rotate import quat_conjugate, quat_rotate_vector
+from .utils.timer import TimerConfig, Timer
 
 
 class Controller:
@@ -45,7 +47,9 @@ class Controller:
         self.publish_lock = threading.Lock()
 
     def _init_timer(self):
-        self.timer = Timer(TimerConfig(time_step=self.cfg["common"]["dt"]))
+        dt = self.cfg["common"]["dt"]
+        self.timer = Timer(TimerConfig(time_step=dt))
+        self.dt = dt
         self.next_publish_time = self.timer.get_time()
         self.next_inference_time = self.timer.get_time()
 
@@ -60,6 +64,80 @@ class Controller:
         self.dof_target = np.zeros(22, dtype=np.float32)
         self.filtered_dof_target = np.zeros(22, dtype=np.float32)
         self.dof_pos_latest = np.zeros(22, dtype=np.float32)
+        self.gravity_magnitude = 9.81
+        self.world_gravity_dir = np.array([0.0, 0.0, -1.0], dtype=np.float32)
+        self.orientation_filter = OrientationFilter(
+            dt=self.cfg["common"]["dt"],
+            gravity_magnitude=self.gravity_magnitude,
+        )
+        self.rerun_logger = OrientationRerunLogger(stream_path="robot/base_pose")
+        self._imu_acc_attributes = (
+            "acc",
+            "accel",
+            "acceleration",
+            "acc_3d",
+            "linear_acceleration",
+        )
+        self._imu_vel_attributes = ("velocity", "lin_vel", "linear_velocity")
+        self.last_imu_update_time = self.timer.get_time()
+        self.orientation_log_period = 0.5
+        self.next_orientation_log_time = self.timer.get_time()
+
+    def _extract_imu_vector(self, imu_state, attr_names):
+        for attr in attr_names:
+            if not hasattr(imu_state, attr):
+                continue
+            value = getattr(imu_state, attr)
+            if value is None:
+                continue
+            vector = np.asarray(value, dtype=np.float32).flatten()
+            if vector.size >= 3:
+                return vector[:3].copy()
+        return None
+
+    def _integrate_base_velocity(self, accel_body: np.ndarray, dt: float) -> None:
+        if not self.orientation_filter.initialized:
+            return
+        accel_body = np.asarray(accel_body, dtype=np.float32)
+        gravity_body = self.projected_gravity * self.gravity_magnitude
+        linear_acc_body = accel_body - gravity_body
+        linear_acc_world = quat_rotate_vector(self.base_quat, linear_acc_body)
+        self.base_lin_vel[:] += linear_acc_world * dt
+
+    def _log_orientation(self, time_now: float) -> None:
+        self.rerun_logger.log_quaternion(self.base_quat)
+
+        if time_now < self.next_orientation_log_time:
+            return
+        self.next_orientation_log_time = time_now + self.orientation_log_period
+
+        roll, pitch, yaw = self._quat_to_rpy(self.base_quat)
+        self.logger.info(
+            "Tracked orientation | quat=%s | rpy_deg=(%.2f, %.2f, %.2f)",
+            np.array2string(self.base_quat, precision=3),
+            np.degrees(roll),
+            np.degrees(pitch),
+            np.degrees(yaw),
+        )
+
+    @staticmethod
+    def _quat_to_rpy(quat: np.ndarray) -> tuple[float, float, float]:
+        w, x, y, z = quat
+        sinr_cosp = 2 * (w * x + y * z)
+        cosr_cosp = 1 - 2 * (x * x + y * y)
+        roll = np.arctan2(sinr_cosp, cosr_cosp)
+
+        sinp = 2 * (w * y - z * x)
+        if abs(sinp) >= 1:
+            pitch = np.sign(sinp) * (np.pi / 2)
+        else:
+            pitch = np.arcsin(sinp)
+
+        siny_cosp = 2 * (w * z + x * y)
+        cosy_cosp = 1 - 2 * (y * y + z * z)
+        yaw = np.arctan2(siny_cosp, cosy_cosp)
+        return roll, pitch, yaw
+
     def _init_communication(self) -> None:
         try:
             self.low_cmd = LowCmd()
@@ -90,16 +168,9 @@ class Controller:
         time_now = self.timer.get_time()
         for i, motor in enumerate(low_state_msg.motor_state_serial):
             self.dof_pos_latest[i] = motor.q
-        if time_now >= self.next_inference_time:
-            self.projected_gravity[:] = rotate_vector_inverse_rpy(
-                low_state_msg.imu_state.rpy[0],
-                low_state_msg.imu_state.rpy[1],
-                low_state_msg.imu_state.rpy[2],
-                np.array([0.0, 0.0, -1.0]),
-            )
-            self.base_ang_vel[:] = low_state_msg.imu_state.gyro
-            
-            rpy = low_state_msg.imu_state.rpy
+            if time_now >= self.next_inference_time:
+                rpy = low_state_msg.imu_state.rpy
+
             def rpy_to_quat(roll, pitch, yaw):
                 cy = np.cos(yaw * 0.5)
                 sy = np.sin(yaw * 0.5)
@@ -113,15 +184,35 @@ class Controller:
                 y = cr * sp * cy + sr * cp * sy
                 z = cr * cp * sy - sr * sp * cy
                 return np.array([w, x, y, z], dtype=np.float32)
-            quaternion = rpy_to_quat(rpy[0], rpy[1], rpy[2])
 
-            self.base_quat[:] = quaternion
+            gyro = np.asarray(low_state_msg.imu_state.gyro, dtype=np.float32)
+            accel = self._extract_imu_vector(
+                low_state_msg.imu_state, self._imu_acc_attributes
+            )
+            if not self.orientation_filter.initialized:
+                self.orientation_filter.reset(rpy_to_quat(rpy[0], rpy[1], rpy[2]))
 
-            # Note: If IMU doesn't provide linear velocity directly, integrate accelerometer
-            if hasattr(low_state_msg.imu_state, "velocity"):
-                self.base_lin_vel[:] = low_state_msg.imu_state.velocity
+            elapsed = max(self.dt, time_now - self.last_imu_update_time)
+            self.last_imu_update_time = time_now
+
+            self.base_ang_vel[:] = gyro
+            self.base_quat[:] = self.orientation_filter.update(
+                gyro=gyro, accel=accel, dt=elapsed
+            )
+            self.projected_gravity[:] = quat_rotate_vector(
+                quat_conjugate(self.base_quat), self.world_gravity_dir
+            )
+            self._log_orientation(time_now)
+
+            velocity = self._extract_imu_vector(
+                low_state_msg.imu_state, self._imu_vel_attributes
+            )
+            if velocity is not None:
+                self.base_lin_vel[:] = velocity
+            elif accel is not None:
+                self._integrate_base_velocity(accel, elapsed)
             else:
-                self.base_lin_vel[:] = np.zeros(3, dtype=np.float32)
+                self.base_lin_vel.fill(0.0)
 
             for i, motor in enumerate(low_state_msg.motor_state_serial):
                 self.dof_pos[i] = motor.q

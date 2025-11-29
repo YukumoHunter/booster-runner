@@ -12,6 +12,7 @@ dependencies = [
     "pybind11>=3.0.1",
     "pybind11-stubgen>=2.5.5",
     "pyyaml>=6.0.3",
+    "rerun-sdk>=0.27.0",
     "sshkeyboard>=2.3.1",
     "torch>=2.9.1",
 ]
