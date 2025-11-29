@@ -17,7 +17,7 @@ from booster_robotics_sdk_python import (
 
 from .utils.command import create_prepare_cmd, create_first_frame_rl_cmd
 from .utils.remote_control_service import RemoteControlService
-from .utils.rotate import rotate_vector_inverse_rpy
+from .utils.rotate import quat_conjugate, quat_rotate_vector, rotate_vector_inverse_rpy
 from .utils.timer import TimerConfig, Timer
 from .utils.policy import Policy
 
@@ -54,14 +54,18 @@ class Controller:
     def _init_low_state_values(self):
         self.base_ang_vel = np.zeros(3, dtype=np.float32)
         self.base_lin_vel = np.zeros(3, dtype=np.float32)
+        self._base_lin_vel_w = np.zeros(3, dtype=np.float32)
         self.base_quat = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        self.base_pos_w = np.zeros(3, dtype=np.float32)
         self.projected_gravity = np.zeros(3, dtype=np.float32)
+        self._gravity_w = np.array([0.0, 0.0, 9.81], dtype=np.float32)
         self.dof_pos = np.zeros(22, dtype=np.float32)
         self.dof_vel = np.zeros(22, dtype=np.float32)
 
         self.dof_target = np.zeros(22, dtype=np.float32)
         self.filtered_dof_target = np.zeros(22, dtype=np.float32)
         self.dof_pos_latest = np.zeros(22, dtype=np.float32)
+        self._last_state_time = None
     def _init_communication(self) -> None:
         try:
             self.low_cmd = LowCmd()
@@ -99,7 +103,7 @@ class Controller:
                 low_state_msg.imu_state.rpy[2],
                 np.array([0.0, 0.0, -1.0]),
             )
-            self.base_ang_vel[:] = low_state_msg.imu_state.gyro
+            self.base_ang_vel[:] = np.array(low_state_msg.imu_state.gyro, dtype=np.float32)
             
             rpy = low_state_msg.imu_state.rpy
             def rpy_to_quat(roll, pitch, yaw):
@@ -118,12 +122,23 @@ class Controller:
             quaternion = rpy_to_quat(rpy[0], rpy[1], rpy[2])
 
             self.base_quat[:] = quaternion
-
-            # Note: If IMU doesn't provide linear velocity directly, integrate accelerometer
-            if hasattr(low_state_msg.imu_state, "velocity"):
-                self.base_lin_vel[:] = low_state_msg.imu_state.velocity
+            if self._last_state_time is None:
+                dt = self.cfg["common"]["dt"]
             else:
-                self.base_lin_vel[:] = np.zeros(3, dtype=np.float32)
+                dt = max(1e-4, time_now - self._last_state_time)
+            self._last_state_time = time_now
+
+            acc_b = np.array(low_state_msg.imu_state.acc, dtype=np.float32)
+            acc_w = quat_rotate_vector(self.base_quat, acc_b)
+            lin_acc_w = acc_w - self._gravity_w
+            self._base_lin_vel_w += lin_acc_w * dt
+            vel_norm = np.linalg.norm(self._base_lin_vel_w)
+            if vel_norm > 5.0:
+                self._base_lin_vel_w *= 5.0 / vel_norm
+            self.base_pos_w += self._base_lin_vel_w * dt
+            self.base_lin_vel[:] = quat_rotate_vector(
+                quat_conjugate(self.base_quat), self._base_lin_vel_w
+            )
 
             for i, motor in enumerate(low_state_msg.motor_state_serial):
                 self.dof_pos[i] = motor.q
@@ -200,6 +215,7 @@ class Controller:
                 base_lin_vel=self.base_lin_vel,
                 base_ang_vel=self.base_ang_vel,
                 base_quat=self.base_quat,
+                base_pos_w=self.base_pos_w,
             )
 
         inference_time = time.perf_counter()

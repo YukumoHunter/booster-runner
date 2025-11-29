@@ -110,12 +110,12 @@ def quat_to_rotation_matrix(q: np.ndarray) -> np.ndarray:
 
 
 def rotation_matrix_to_6d(R: np.ndarray) -> np.ndarray:
-    """Convert 3x3 rotation matrix to 6D representation (first 2 rows flattened).
+    """Convert 3x3 rotation matrix to 6D representation (first 2 columns flattened).
 
     Args:
         R: 3x3 rotation matrix
 
     Returns:
-        6D vector (first 2 rows of R flattened)
+        6D vector (first 2 columns of R flattened)
     """
-    return R[:2, :].flatten()
+    return R[:, :2].reshape(-1)

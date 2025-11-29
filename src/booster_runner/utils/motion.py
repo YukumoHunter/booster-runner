@@ -19,7 +19,7 @@ class MotionPlayer:
             raise FileNotFoundError(f"Motion file '{motion_path}' does not exist.")
 
         data = np.load(path, allow_pickle=False)
-        required_keys = ("joint_pos", "joint_vel", "body_quat_w")
+        required_keys = ("joint_pos", "joint_vel", "body_pos_w", "body_quat_w")
         missing = [k for k in required_keys if k not in data]
         if missing:
             raise ValueError(
@@ -28,6 +28,7 @@ class MotionPlayer:
 
         self._joint_pos = np.asarray(data["joint_pos"], dtype=np.float32)
         self._joint_vel = np.asarray(data["joint_vel"], dtype=np.float32)
+        body_pos = np.asarray(data["body_pos_w"], dtype=np.float32)
         body_quat = np.asarray(data["body_quat_w"], dtype=np.float32)
 
         if self._joint_pos.shape != self._joint_vel.shape:
@@ -36,10 +37,10 @@ class MotionPlayer:
                 f"(got {self._joint_pos.shape} and {self._joint_vel.shape})."
             )
 
-        if body_quat.ndim != 3:
+        if body_pos.ndim != 3 or body_quat.ndim != 3:
             raise ValueError(
-                "body_quat_w array must have shape (frames, bodies, 4). "
-                f"Got {body_quat.shape}."
+                "body_pos_w and body_quat_w arrays must have shape (frames, bodies, X). "
+                f"Got {body_pos.shape} and {body_quat.shape}."
             )
 
         if anchor_body_index < 0 or anchor_body_index >= body_quat.shape[1]:
@@ -48,6 +49,7 @@ class MotionPlayer:
                 f"[0, {body_quat.shape[1] - 1}]."
             )
 
+        self._anchor_pos = body_pos[:, anchor_body_index]
         self._anchor_quat = body_quat[:, anchor_body_index]
         self._frame_count = self._joint_pos.shape[0]
         if self._frame_count == 0:
@@ -70,15 +72,16 @@ class MotionPlayer:
     def command_dim(self) -> int:
         return self.num_joints * 2
 
-    def step(self, dt: float | None) -> Tuple[np.ndarray, np.ndarray]:
+    def step(self, dt: float | None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Return the current command vector and advance the playback cursor."""
         command = np.concatenate(
             (self._joint_pos[self._frame_idx], self._joint_vel[self._frame_idx]),
             axis=0,
         ).astype(np.float32, copy=False)
+        anchor_pos = self._anchor_pos[self._frame_idx].copy()
         anchor_quat = self._anchor_quat[self._frame_idx].copy()
         self._advance(dt)
-        return command, anchor_quat
+        return command, anchor_pos, anchor_quat
 
     def _advance(self, dt: float | None) -> None:
         if self._motion_dt is None:

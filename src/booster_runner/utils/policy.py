@@ -3,13 +3,7 @@ import onnxruntime
 import torch
 
 from .motion import MotionPlayer
-from .rotate import (
-    quat_conjugate,
-    quat_multiply,
-    quat_rotate_vector,
-    quat_to_rotation_matrix,
-    rotation_matrix_to_6d,
-)
+from .reference_observation import ReferenceObservationBuilder
 
 
 class Policy:
@@ -64,6 +58,7 @@ class Policy:
         self.stiffness = np.array(self.cfg["common"]["stiffness"], dtype=np.float32)
         self.damping = np.array(self.cfg["common"]["damping"], dtype=np.float32)
 
+        self.default_dof_vel = np.zeros_like(self.default_dof_pos)
         self.dof_targets = np.copy(self.default_dof_pos)
         self.obs = np.zeros(self.cfg["policy"]["num_observations"], dtype=np.float32)
         self.actions = np.zeros(self.cfg["policy"]["num_actions"], dtype=np.float32)
@@ -83,6 +78,12 @@ class Policy:
         self.motion_anchor_quat = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
         self.motion_anchor_pos = np.zeros(3, dtype=np.float32)
 
+        self.obs_builder = ReferenceObservationBuilder(
+            default_joint_pos=self.default_dof_pos,
+            default_joint_vel=self.default_dof_vel,
+            obs_dim=self.cfg["policy"]["num_observations"],
+        )
+
         # ONNX-specific output storage (for future use)
         if self.model_type == "onnx":
             self.last_joint_pos = np.zeros(22, dtype=np.float32)
@@ -100,6 +101,7 @@ class Policy:
         base_lin_vel: np.ndarray,
         base_ang_vel: np.ndarray,
         base_quat: np.ndarray,
+        base_pos_w: np.ndarray,
     ) -> np.ndarray:
         """Run policy inference for motion tracking.
 
@@ -110,49 +112,30 @@ class Policy:
             base_lin_vel: Base linear velocity (3 dims)
             base_ang_vel: Base angular velocity (3 dims)
             base_quat: Base orientation quaternion (4 dims, [w, x, y, z])
+            base_pos_w: Base position in world frame (3 dims)
 
         Returns:
             Target joint positions (22 dims)
         """
-        # Get motion command and anchor quaternion from MotionPlayer
-        motion_command, self.motion_anchor_quat = self.motion_player.step(
-            self.policy_interval
+        # Get motion command and anchor pose from MotionPlayer
+        motion_command, motion_anchor_pos, self.motion_anchor_quat = (
+            self.motion_player.step(self.policy_interval)
         )
+        self.motion_anchor_pos[:] = motion_anchor_pos
 
-        # Build observation vector (125 dims)
-        # 0:44 - command (22 joint positions + 22 joint velocities)
-        self.obs[0:44] = motion_command
-
-        # 44:47 - motion_anchor_pos_b (motion anchor position in robot body frame)
-        # For real robot deployment, we assume the motion anchor position is at the
-        # same location as the robot anchor (Trunk), so relative position is [0, 0, 0]
-        # This simplifies the implementation for hardware deployment
-        self.obs[44:47] = 0.0
-
-        # 47:53 - motion_anchor_ori_b (motion anchor orientation in robot body frame)
-        # Compute relative orientation between motion anchor and robot base
-        relative_quat = quat_multiply(
-            quat_conjugate(base_quat), self.motion_anchor_quat
+        # Assemble observation via shared builder to match simulation exactly
+        self.obs[:] = self.obs_builder.build(
+            command=motion_command,
+            motion_anchor_pos_w=motion_anchor_pos,
+            motion_anchor_quat_w=self.motion_anchor_quat,
+            robot_anchor_pos_w=base_pos_w,
+            robot_anchor_quat_w=base_quat,
+            base_lin_vel_b=base_lin_vel,
+            base_ang_vel_b=base_ang_vel,
+            joint_pos=dof_pos,
+            joint_vel=dof_vel,
+            last_action_raw=self.actions,
         )
-        relative_rot_mat = quat_to_rotation_matrix(relative_quat)
-        self.obs[47:53] = rotation_matrix_to_6d(relative_rot_mat)
-
-        # 53:56 - base_lin_vel
-        self.obs[53:56] = base_lin_vel * self.cfg["policy"]["normalization"]["lin_vel"]
-
-        # 56:59 - base_ang_vel
-        self.obs[56:59] = base_ang_vel * self.cfg["policy"]["normalization"]["ang_vel"]
-
-        # 59:81 - joint_pos (relative to default positions, all 22 joints)
-        self.obs[59:81] = (dof_pos - self.default_dof_pos) * self.cfg["policy"][
-            "normalization"
-        ]["dof_pos"]
-
-        # 81:103 - joint_vel (all 22 joints)
-        self.obs[81:103] = dof_vel * self.cfg["policy"]["normalization"]["dof_vel"]
-
-        # 103:125 - actions (previous actions, all 22 dims)
-        self.obs[103:125] = self.actions
 
         # Run policy inference
         if self.model_type == "torchscript":
@@ -215,7 +198,7 @@ class Policy:
             Target joint positions from reference motion (22 dims)
         """
         # Get motion command from MotionPlayer (44 dims: 22 pos + 22 vel)
-        motion_command, _ = self.motion_player.step(self.policy_interval)
+        motion_command, _, _ = self.motion_player.step(self.policy_interval)
 
         # Extract joint positions (first 22 elements)
         reference_joint_pos = motion_command[:22]
