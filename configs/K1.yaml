@@ -111,7 +111,7 @@ common:
     ]
 
 policy:
-  policy_path: "./models/2025-11-26_11-50-24.onnx"
+  policy_path: "./models/dance_abc.onnx"
   num_actions: 22
   num_observations: 125
   motion_file: "" # Set via --motion command-line argument

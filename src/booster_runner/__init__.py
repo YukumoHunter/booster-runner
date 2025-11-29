@@ -54,13 +54,12 @@ class Controller:
         self.base_lin_vel = np.zeros(3, dtype=np.float32)
         self.base_quat = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
         self.projected_gravity = np.zeros(3, dtype=np.float32)
-        self.dof_pos = np.zeros(B1JointCnt, dtype=np.float32)
-        self.dof_vel = np.zeros(B1JointCnt, dtype=np.float32)
+        self.dof_pos = np.zeros(22, dtype=np.float32)
+        self.dof_vel = np.zeros(22, dtype=np.float32)
 
-        self.dof_target = np.zeros(B1JointCnt, dtype=np.float32)
-        self.filtered_dof_target = np.zeros(B1JointCnt, dtype=np.float32)
-        self.dof_pos_latest = np.zeros(B1JointCnt, dtype=np.float32)
-
+        self.dof_target = np.zeros(22, dtype=np.float32)
+        self.filtered_dof_target = np.zeros(22, dtype=np.float32)
+        self.dof_pos_latest = np.zeros(22, dtype=np.float32)
     def _init_communication(self) -> None:
         try:
             self.low_cmd = LowCmd()
@@ -86,6 +85,7 @@ class Controller:
                 )
             )
             self.running = False
+        self.running = True
         self.timer.tick_timer_if_sim()
         time_now = self.timer.get_time()
         for i, motor in enumerate(low_state_msg.motor_state_serial):
@@ -98,12 +98,30 @@ class Controller:
                 np.array([0.0, 0.0, -1.0]),
             )
             self.base_ang_vel[:] = low_state_msg.imu_state.gyro
-            self.base_quat[:] = low_state_msg.imu_state.quaternion
+            
+            rpy = low_state_msg.imu_state.rpy
+            def rpy_to_quat(roll, pitch, yaw):
+                cy = np.cos(yaw * 0.5)
+                sy = np.sin(yaw * 0.5)
+                cp = np.cos(pitch * 0.5)
+                sp = np.sin(pitch * 0.5)
+                cr = np.cos(roll * 0.5)
+                sr = np.sin(roll * 0.5)
+
+                w = cr * cp * cy + sr * sp * sy
+                x = sr * cp * cy - cr * sp * sy
+                y = cr * sp * cy + sr * cp * sy
+                z = cr * cp * sy - sr * sp * cy
+                return np.array([w, x, y, z], dtype=np.float32)
+            quaternion = rpy_to_quat(rpy[0], rpy[1], rpy[2])
+
+            self.base_quat[:] = quaternion
 
             # Note: If IMU doesn't provide linear velocity directly, integrate accelerometer
-            # For now, we use the field if available, otherwise default to zeros
             if hasattr(low_state_msg.imu_state, "velocity"):
                 self.base_lin_vel[:] = low_state_msg.imu_state.velocity
+            else:
+                self.base_lin_vel[:] = np.zeros(3, dtype=np.float32)
 
             for i, motor in enumerate(low_state_msg.motor_state_serial):
                 self.dof_pos[i] = motor.q
@@ -133,7 +151,7 @@ class Controller:
             time.sleep(0.1)
         start_time = time.perf_counter()
         create_prepare_cmd(self.low_cmd, self.cfg)
-        for i in range(B1JointCnt):
+        for i in range(22):
             self.dof_target[i] = self.low_cmd.motor_cmd[i].q
             self.filtered_dof_target[i] = self.low_cmd.motor_cmd[i].q
         self._send_cmd(self.low_cmd)
@@ -197,7 +215,7 @@ class Controller:
             )
 
             motor_cmd = self.low_cmd.motor_cmd
-            for i in range(B1JointCnt):
+            for i in range(22):
                 motor_cmd[i].q = self.filtered_dof_target[i]
 
             # Use series-parallel conversion for torque to avoid non-linearity
