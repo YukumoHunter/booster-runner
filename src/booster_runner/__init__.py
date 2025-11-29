@@ -102,7 +102,7 @@ class Controller:
 
             # Note: If IMU doesn't provide linear velocity directly, integrate accelerometer
             # For now, we use the field if available, otherwise default to zeros
-            if hasattr(low_state_msg.imu_state, 'velocity'):
+            if hasattr(low_state_msg.imu_state, "velocity"):
                 self.base_lin_vel[:] = low_state_msg.imu_state.velocity
 
             for i, motor in enumerate(low_state_msg.motor_state_serial):
