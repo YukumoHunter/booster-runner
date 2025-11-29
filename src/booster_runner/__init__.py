@@ -54,6 +54,8 @@ class Controller:
         self.timer = Timer(TimerConfig(time_step=self.cfg["common"]["dt"]))
         self.next_publish_time = self.timer.get_time()
         self.next_inference_time = self.timer.get_time()
+        self.in_initialization = False
+        self.init_start_time = None
 
     def _init_low_state_values(self):
         self.base_ang_vel = np.zeros(3, dtype=np.float32)
@@ -193,10 +195,24 @@ class Controller:
             if self.remoteControlService.start_rl_gait():
                 break
             time.sleep(0.1)
+
+        # Get first frame of reference motion
+        first_frame_motion = self.policy.get_first_frame_motion()
+
+        # Set command to first frame positions
         create_first_frame_rl_cmd(self.low_cmd, self.cfg)
+        for i in range(22):
+            self.low_cmd.motor_cmd[i].q = first_frame_motion[i]
+
         self._send_cmd(self.low_cmd)
-        self.next_inference_time = self.timer.get_time()
-        self.next_publish_time = self.timer.get_time()
+
+        # Initialize timing with 3-second delay for initialization phase
+        init_time = self.timer.get_time()
+        self.init_start_time = init_time
+        self.in_initialization = True
+        self.next_inference_time = init_time + 3.0  # Delay inference by 3 seconds
+        self.next_publish_time = init_time
+
         self.publish_runner = threading.Thread(target=self._publish_cmd)
         self.publish_runner.daemon = True
         self.publish_runner.start()
@@ -204,6 +220,21 @@ class Controller:
 
     def run(self):
         time_now = self.timer.get_time()
+
+        # Handle initialization phase
+        if self.in_initialization:
+            if time_now < self.next_inference_time:
+                # Still in initialization - keep holding frame 0
+                # The publish thread continues sending the frame 0 command
+                time.sleep(0.001)
+                return
+            else:
+                # Initialization complete - transition to normal operation
+                self.in_initialization = False
+                self.logger.info("Initialization complete - starting policy inference")
+                # next_inference_time is already set correctly for first inference
+
+        # Continue with existing control logic
         if time_now < self.next_inference_time:
             time.sleep(0.001)
             return

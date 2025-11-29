@@ -61,6 +61,7 @@ class Policy:
         self.default_dof_vel = np.zeros_like(self.default_dof_pos)
         self.dof_targets = np.copy(self.default_dof_pos)
         self.obs = np.zeros(self.cfg["policy"]["num_observations"], dtype=np.float32)
+        self.raw_actions = np.zeros(self.cfg["policy"]["num_actions"], dtype=np.float32)
         self.actions = np.zeros(self.cfg["policy"]["num_actions"], dtype=np.float32)
 
         # Use custom playback FPS if provided, otherwise use policy decimation
@@ -134,7 +135,7 @@ class Policy:
             base_ang_vel_b=base_ang_vel,
             joint_pos=dof_pos,
             joint_vel=dof_vel,
-            last_action_raw=self.actions,
+            last_action_raw=self.raw_actions,
         )
 
         # Run policy inference
@@ -145,6 +146,7 @@ class Policy:
             )
         else:  # onnx
             # ONNX inference
+            print("obs:", self.obs.reshape(1, -1).astype(np.float32))
             onnx_inputs = {
                 "obs": self.obs.reshape(1, -1).astype(np.float32),
                 "time_step": np.array(
@@ -167,6 +169,7 @@ class Policy:
 
             # Extract actions (first output)
             self.actions[:] = results[0].flatten()
+            self.raw_actions[:] = results[0].flatten().copy()
 
             # Store other outputs for future use
             self.last_joint_pos[:] = results[1].flatten()
@@ -204,6 +207,16 @@ class Policy:
         reference_joint_pos = motion_command[:22]
 
         return reference_joint_pos
+
+    def get_first_frame_motion(self) -> np.ndarray:
+        """Get the first frame of reference motion without advancing the player.
+
+        Returns:
+            Joint positions from frame 0 (22 dims)
+        """
+        # Access frame 0 directly without calling step()
+        first_frame_pos = self.motion_player._joint_pos[0]
+        return first_frame_pos.copy()
 
     def get_onnx_outputs(self):
         """Return last ONNX inference outputs for debugging/logging.
