@@ -39,7 +39,7 @@ common:
   ]
 
 policy:
-  policy_path: "./models/K1_tracking.pt"
+  policy_path: "./2025-11-26_11-50-24.onnx"
   num_actions: 22
   num_observations: 125
   motion_file: ""  # Set via --motion command-line argument
