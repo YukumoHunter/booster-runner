@@ -23,7 +23,9 @@ from .utils.policy import Policy
 
 
 class Controller:
-    def __init__(self, cfg_file, motion_file, playback_only=False, playback_fps=None) -> None:
+    def __init__(
+        self, cfg_file, motion_file, playback_only=False, playback_fps=None
+    ) -> None:
         # Setup logging
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
@@ -34,7 +36,9 @@ class Controller:
 
         # Initialize components
         self.remoteControlService = RemoteControlService()
-        self.policy = Policy(cfg=self.cfg, motion_file_path=motion_file, playback_fps=playback_fps)
+        self.policy = Policy(
+            cfg=self.cfg, motion_file_path=motion_file, playback_fps=playback_fps
+        )
         self.playback_only = playback_only
         self.playback_fps = playback_fps
 
@@ -66,6 +70,7 @@ class Controller:
         self.filtered_dof_target = np.zeros(22, dtype=np.float32)
         self.dof_pos_latest = np.zeros(22, dtype=np.float32)
         self._last_state_time = None
+
     def _init_communication(self) -> None:
         try:
             self.low_cmd = LowCmd()
@@ -103,9 +108,12 @@ class Controller:
                 low_state_msg.imu_state.rpy[2],
                 np.array([0.0, 0.0, -1.0]),
             )
-            self.base_ang_vel[:] = np.array(low_state_msg.imu_state.gyro, dtype=np.float32)
-            
+            self.base_ang_vel[:] = np.array(
+                low_state_msg.imu_state.gyro, dtype=np.float32
+            )
+
             rpy = low_state_msg.imu_state.rpy
+
             def rpy_to_quat(roll, pitch, yaw):
                 cy = np.cos(yaw * 0.5)
                 sy = np.sin(yaw * 0.5)
@@ -119,6 +127,7 @@ class Controller:
                 y = cr * sp * cy + sr * cp * sy
                 z = cr * cp * sy - sr * sp * cy
                 return np.array([w, x, y, z], dtype=np.float32)
+
             quaternion = rpy_to_quat(rpy[0], rpy[1], rpy[2])
 
             self.base_quat[:] = quaternion
@@ -323,7 +332,12 @@ def main():
         print(f"Using custom playback FPS: {args.playback_fps}")
 
     try:
-        with Controller(cfg_file, args.motion, playback_only=args.playback_only, playback_fps=args.playback_fps) as controller:
+        with Controller(
+            cfg_file,
+            args.motion,
+            playback_only=args.playback_only,
+            playback_fps=args.playback_fps,
+        ) as controller:
             time.sleep(2)  # Wait for channels to initialize
             print("Initialization complete.")
             controller.start_custom_mode_conditionally()
