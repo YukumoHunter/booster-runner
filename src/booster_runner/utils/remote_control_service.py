@@ -1,9 +1,10 @@
 from typing import Optional
 import evdev
-from sshkeyboard import listen_keyboard
+from sshkeyboard import listen_keyboard, stop_listening
 import threading
 from dataclasses import dataclass
 import time
+import atexit
 
 
 @dataclass
@@ -50,7 +51,21 @@ class RemoteControlService:
     def get_operation_hint(self) -> str:
         if hasattr(self, "joystick") and getattr(self, "joystick") != None:
             return "Left axis for forward/backward/left/right, right axis for rotation left/right"
-        return "Press 'w'/'s' to increase/decrease vx; Press 'a'/'d' to increase/decrease vy; Press 'q'/'e' to increase/decrease vyaw, press 'Space' to stop."
+        return """
+╔════════════════════════════════════════════════════════╗
+║           KEYBOARD CONTROL INSTRUCTIONS                ║
+╠════════════════════════════════════════════════════════╣
+║  W/S  : Forward/Backward velocity (+/- 0.1 per press) ║
+║  A/D  : Left/Right velocity (+/- 0.1 per press)       ║
+║  Q/E  : Rotate left/right (+/- 0.1 per press)         ║
+║  SPACE: Emergency stop (reset all velocities to 0)    ║
+║                                                        ║
+║  Current max velocities:                               ║
+║    vx (forward/back): ±0.5 m/s                        ║
+║    vy (left/right):   ±0.5 m/s                        ║
+║    vyaw (rotation):   ±0.5 rad/s                      ║
+╚════════════════════════════════════════════════════════╝
+"""
 
     def get_custom_mode_operation_hint(self) -> str:
         if hasattr(self, "joystick") and getattr(self, "joystick") != None:
@@ -67,11 +82,20 @@ class RemoteControlService:
         self.joystick_runner = None
         self.keyboard_start_custom_mode = False
         self.keyboard_start_rl_gait = False
+        # Register cleanup function to restore terminal on exit
+        atexit.register(self._cleanup_keyboard)
 
     def _start_keyboard_thread(self):
         self.keyboard_runner = threading.Thread(target=listen_keyboard, args=(self._handle_keyboard_press,))
         self.keyboard_runner.daemon = True
         self.keyboard_runner.start()
+
+    def _cleanup_keyboard(self):
+        """Ensure keyboard listener is stopped and terminal is restored."""
+        try:
+            stop_listening()
+        except Exception:
+            pass
 
     def _handle_keyboard_press(self, key):
         if key == "b":
@@ -230,6 +254,8 @@ class RemoteControlService:
     def close(self):
         """Clean up resources."""
         self._running = False
+        # Stop keyboard listener first to restore terminal
+        self._cleanup_keyboard()
         if hasattr(self, "joystick") and getattr(self, "joystick") != None:
             self.joystick.close()
         if hasattr(self, "joystick_runner") and getattr(self, "joystick_runner") != None:

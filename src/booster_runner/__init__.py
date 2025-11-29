@@ -232,8 +232,12 @@ def main():
     import sys
     import os
 
-    def signal_handler(sig, frame):
+    controller = None
+
+    def signal_handler(_sig, _frame):
         print("\nShutting down...")
+        if controller:
+            controller.cleanup()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
@@ -261,16 +265,22 @@ def main():
     print(f"Loading motion file: {args.motion}")
     ChannelFactory.Instance().Init(0, args.net)
 
-    with Controller(cfg_file, args.motion) as controller:
-        time.sleep(2)  # Wait for channels to initialize
-        print("Initialization complete.")
-        controller.start_custom_mode_conditionally()
-        controller.start_rl_gait_conditionally()
+    try:
+        with Controller(cfg_file, args.motion) as controller:
+            time.sleep(2)  # Wait for channels to initialize
+            print("Initialization complete.")
+            controller.start_custom_mode_conditionally()
+            controller.start_rl_gait_conditionally()
 
-        try:
-            while controller.running:
-                controller.run()
-            controller.client.ChangeMode(RobotMode.kDamping)
-        except KeyboardInterrupt:
-            print("\nKeyboard interrupt received. Cleaning up...")
+            try:
+                while controller.running:
+                    controller.run()
+                controller.client.ChangeMode(RobotMode.kDamping)
+            except KeyboardInterrupt:
+                print("\nKeyboard interrupt received. Cleaning up...")
+                controller.cleanup()
+    except Exception as e:
+        print(f"\nError occurred: {e}")
+        if controller:
             controller.cleanup()
+        raise
