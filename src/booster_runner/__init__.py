@@ -46,9 +46,7 @@ class LowStateBuffers:
 
 
 class Controller:
-    def __init__(
-        self, cfg_file, playback_only=False, playback_fps=None
-    ) -> None:
+    def __init__(self, cfg_file, playback_only=False, playback_fps=None) -> None:
         # Setup logging
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
@@ -59,9 +57,7 @@ class Controller:
 
         # Initialize components
         self.remoteControlService = RemoteControlService()
-        self.policy = Policy(
-            cfg=self.cfg, playback_fps=playback_fps
-        )
+        self.policy = Policy(cfg=self.cfg, playback_fps=playback_fps)
         self.playback_only = playback_only
         self.playback_fps = playback_fps
 
@@ -334,7 +330,7 @@ class Controller:
                 time_now=time_now,
                 dof_pos=self.dof_pos,
                 dof_vel=self.dof_vel,
-                base_lin_vel=self.base_lin_vel,
+                # base_lin_vel=self.base_lin_vel,
                 base_ang_vel=self.base_ang_vel,
                 base_quat=self.base_quat,
                 base_pos_w=self.base_pos_w,

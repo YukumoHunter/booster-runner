@@ -39,7 +39,9 @@ def _relative_transform(
     return pos_rel, q_rel
 
 
-def _as_float_array(vec: np.ndarray | list[float], length: int, name: str) -> np.ndarray:
+def _as_float_array(
+    vec: np.ndarray | list[float], length: int, name: str
+) -> np.ndarray:
     arr = np.asarray(vec, dtype=np.float32)
     if arr.shape != (length,):
         raise ValueError(f"{name} must have shape ({length},), got {arr.shape}")
@@ -65,7 +67,7 @@ def _build_layout(num_joints: int, obs_dim: int) -> tuple[ObservationTermLayout,
             6,
             "First two columns of the relative rotation matrix (body -> motion anchor)",
         ),
-        ("base_lin_vel", 3, "IMU linear velocity measured in the base frame (m/s)"),
+        # ("base_lin_vel", 3, "IMU linear velocity measured in the base frame (m/s)"),
         ("base_ang_vel", 3, "IMU angular velocity measured in the base frame (rad/s)"),
         ("joint_pos", num_joints, "Joint positions relative to default pose"),
         ("joint_vel", num_joints, "Joint velocities relative to default (zero)"),
@@ -76,7 +78,9 @@ def _build_layout(num_joints: int, obs_dim: int) -> tuple[ObservationTermLayout,
     layout: list[ObservationTermLayout] = []
     for name, length, desc in lengths:
         stop = start + length
-        layout.append(ObservationTermLayout(name=name, sl=slice(start, stop), description=desc))
+        layout.append(
+            ObservationTermLayout(name=name, sl=slice(start, stop), description=desc)
+        )
         start = stop
 
     if start != obs_dim:
@@ -94,7 +98,7 @@ class ReferenceObservationBuilder:
         self,
         default_joint_pos: np.ndarray,
         default_joint_vel: np.ndarray | None = None,
-        obs_dim: int = 125,
+        obs_dim: int = 122,
     ) -> None:
         self.default_joint_pos = np.asarray(default_joint_pos, dtype=np.float32).copy()
         self.default_joint_vel = (
@@ -112,7 +116,9 @@ class ReferenceObservationBuilder:
         self.obs_dim = obs_dim
 
         self._layout = _build_layout(self.num_joints, obs_dim)
-        self._slices: Mapping[str, slice] = {term.name: term.sl for term in self._layout}
+        self._slices: Mapping[str, slice] = {
+            term.name: term.sl for term in self._layout
+        }
 
     @property
     def layout(self) -> tuple[ObservationTermLayout, ...]:
@@ -128,7 +134,7 @@ class ReferenceObservationBuilder:
         motion_anchor_quat_w: np.ndarray,
         robot_anchor_pos_w: np.ndarray,
         robot_anchor_quat_w: np.ndarray,
-        base_lin_vel_b: np.ndarray,
+        # base_lin_vel_b: np.ndarray,
         base_ang_vel_b: np.ndarray,
         joint_pos: np.ndarray,
         joint_vel: np.ndarray,
@@ -155,10 +161,18 @@ class ReferenceObservationBuilder:
             command, self.num_joints * 2, "command"
         )
 
-        motion_anchor_pos_w = _as_float_array(motion_anchor_pos_w, 3, "motion_anchor_pos_w")
-        robot_anchor_pos_w = _as_float_array(robot_anchor_pos_w, 3, "robot_anchor_pos_w")
-        motion_anchor_quat_w = _as_float_array(motion_anchor_quat_w, 4, "motion_anchor_quat_w")
-        robot_anchor_quat_w = _as_float_array(robot_anchor_quat_w, 4, "robot_anchor_quat_w")
+        motion_anchor_pos_w = _as_float_array(
+            motion_anchor_pos_w, 3, "motion_anchor_pos_w"
+        )
+        robot_anchor_pos_w = _as_float_array(
+            robot_anchor_pos_w, 3, "robot_anchor_pos_w"
+        )
+        motion_anchor_quat_w = _as_float_array(
+            motion_anchor_quat_w, 4, "motion_anchor_quat_w"
+        )
+        robot_anchor_quat_w = _as_float_array(
+            robot_anchor_quat_w, 4, "robot_anchor_quat_w"
+        )
 
         rel_pos_b, rel_quat_b = _relative_transform(
             robot_anchor_pos_w,
@@ -178,11 +192,16 @@ class ReferenceObservationBuilder:
             base_ang_vel_b, 3, "base_ang_vel_b"
         )
 
-        obs[self._slices["joint_pos"]] = _as_float_array(joint_pos, self.num_joints, "joint_pos") - self.default_joint_pos
-        obs[self._slices["joint_vel"]] = _as_float_array(joint_vel, self.num_joints, "joint_vel") - self.default_joint_vel
+        obs[self._slices["joint_pos"]] = (
+            _as_float_array(joint_pos, self.num_joints, "joint_pos")
+            - self.default_joint_pos
+        )
+        obs[self._slices["joint_vel"]] = (
+            _as_float_array(joint_vel, self.num_joints, "joint_vel")
+            - self.default_joint_vel
+        )
         obs[self._slices["actions"]] = _as_float_array(
             last_action_raw, self.num_joints, "last_action_raw"
         )
 
         return obs
-

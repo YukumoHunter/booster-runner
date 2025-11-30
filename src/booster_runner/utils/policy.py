@@ -54,7 +54,9 @@ class Policy:
 
         # Extract body names (comma-separated string)
         body_names_str = metadata.get("body_names", "")
-        self.body_names = [name.strip() for name in body_names_str.split(",") if name.strip()]
+        self.body_names = [
+            name.strip() for name in body_names_str.split(",") if name.strip()
+        ]
 
         # Find anchor body index in body_names list
         if self.anchor_body_name in self.body_names:
@@ -63,7 +65,9 @@ class Policy:
             self.anchor_body_index = 0  # Fallback to trunk
 
         print(f"ONNX Metadata:")
-        print(f"  - Anchor body: {self.anchor_body_name} (index {self.anchor_body_index})")
+        print(
+            f"  - Anchor body: {self.anchor_body_name} (index {self.anchor_body_index})"
+        )
         print(f"  - Body names: {self.body_names}")
 
     def _init_inference_variables(self):
@@ -108,7 +112,7 @@ class Policy:
         time_now: float,
         dof_pos: np.ndarray,
         dof_vel: np.ndarray,
-        base_lin_vel: np.ndarray,
+        # base_lin_vel: np.ndarray,
         base_ang_vel: np.ndarray,
         base_quat: np.ndarray,
         base_pos_w: np.ndarray,
@@ -137,14 +141,22 @@ class Policy:
             }
 
             # Request all motion outputs
-            output_names = ["actions", "joint_pos", "joint_vel", "body_pos_w", "body_quat_w"]
+            output_names = [
+                "actions",
+                "joint_pos",
+                "joint_vel",
+                "body_pos_w",
+                "body_quat_w",
+            ]
             results = self.onnx_session.run(
                 output_names=output_names,
                 input_feed=onnx_inputs_ref,
             )
 
             # Extract outputs
-            actions_out, joint_pos_out, joint_vel_out, body_pos_out, body_quat_out = results
+            actions_out, joint_pos_out, joint_vel_out, body_pos_out, body_quat_out = (
+                results
+            )
 
             # Store action outputs
             self.ref_actions = actions_out.flatten()
@@ -153,21 +165,29 @@ class Policy:
             self.ref_joint_pos = joint_pos_out.flatten()
             self.ref_joint_vel = joint_vel_out.flatten()
             self.ref_body_pos_w = body_pos_out  # Shape: (num_bodies, 3)
-            self.ref_body_quat_w = body_quat_out  # Shape: (num_bodies, 4) in wxyz format
+            self.ref_body_quat_w = (
+                body_quat_out  # Shape: (num_bodies, 4) in wxyz format
+            )
 
             # Extract anchor body pose
             self.motion_anchor_pos = self.ref_body_pos_w[self.anchor_body_index].copy()
-            self.motion_anchor_quat = self.ref_body_quat_w[self.anchor_body_index].copy()
+            self.motion_anchor_quat = self.ref_body_quat_w[
+                self.anchor_body_index
+            ].copy()
 
             # Build command from ONNX reference motion (not from NPZ!)
-            motion_command = np.concatenate([self.ref_joint_pos, self.ref_joint_vel], axis=0)
+            motion_command = np.concatenate(
+                [self.ref_joint_pos, self.ref_joint_vel], axis=0
+            )
 
             # Increment timestep for next inference
             self.time_step += 1
         else:
             # For TorchScript, we need to handle this differently
             # For now, use zeros (this path needs proper implementation if TorchScript is used)
-            motion_command = np.zeros(self.cfg["policy"]["num_actions"] * 2, dtype=np.float32)
+            motion_command = np.zeros(
+                self.cfg["policy"]["num_actions"] * 2, dtype=np.float32
+            )
             self.motion_anchor_pos = np.zeros(3, dtype=np.float32)
             self.motion_anchor_quat = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
 
@@ -178,7 +198,7 @@ class Policy:
             motion_anchor_quat_w=self.motion_anchor_quat,
             robot_anchor_pos_w=base_pos_w,
             robot_anchor_quat_w=base_quat,
-            base_lin_vel_b=base_lin_vel,
+            # base_lin_vel_b=base_lin_vel,
             base_ang_vel_b=base_ang_vel,
             joint_pos=dof_pos,
             joint_vel=dof_vel,
@@ -222,7 +242,9 @@ class Policy:
         if self.model_type == "onnx":
             # Run ONNX to get reference motion only
             onnx_inputs = {
-                "obs": np.zeros((1, self.cfg["policy"]["num_observations"]), dtype=np.float32),
+                "obs": np.zeros(
+                    (1, self.cfg["policy"]["num_observations"]), dtype=np.float32
+                ),
                 "time_step": np.array([[self.time_step]], dtype=np.float32),
             }
 
@@ -249,7 +271,9 @@ class Policy:
             self.time_step = 0
 
             onnx_inputs = {
-                "obs": np.zeros((1, self.cfg["policy"]["num_observations"]), dtype=np.float32),
+                "obs": np.zeros(
+                    (1, self.cfg["policy"]["num_observations"]), dtype=np.float32
+                ),
                 "time_step": np.array([[0]], dtype=np.float32),
             }
 
