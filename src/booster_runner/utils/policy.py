@@ -173,12 +173,12 @@ class Policy:
             # Store reference motion outputs
             self.ref_joint_pos = joint_pos_out.flatten()
             self.ref_joint_vel = joint_vel_out.flatten()
-            # body_pos_out shape: (num_bodies, 3) - positions for all bodies
-            # body_quat_out shape: (num_bodies, 4) - quaternions for all bodies
-            self.ref_body_pos_w = body_pos_out
-            self.ref_body_quat_w = body_quat_out
+            # Remove batch dimension first: (1, 25, 3) -> (25, 3)
+            self.ref_body_pos_w = body_pos_out[0]
+            self.ref_body_quat_w = body_quat_out[0]
 
             # Extract anchor body pose (just one body from all bodies)
+            # Now indexing (25, 3) with [anchor_body_index] gives (3,)
             self.motion_anchor_pos = self.ref_body_pos_w[self.anchor_body_index].copy()
             self.motion_anchor_quat = self.ref_body_quat_w[
                 self.anchor_body_index
