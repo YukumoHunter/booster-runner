@@ -185,9 +185,9 @@ class ReferenceObservationBuilder:
             quat_to_rotation_matrix(rel_quat_b)
         )
 
-        obs[self._slices["base_lin_vel"]] = _as_float_array(
-            base_lin_vel_b, 3, "base_lin_vel_b"
-        )
+        # obs[self._slices["base_lin_vel"]] = _as_float_array(
+        #     base_lin_vel_b, 3, "base_lin_vel_b"
+        # )
         obs[self._slices["base_ang_vel"]] = _as_float_array(
             base_ang_vel_b, 3, "base_ang_vel_b"
         )
