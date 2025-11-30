@@ -158,22 +158,34 @@ class Policy:
                 results
             )
 
+            # Debug: print shapes
+            print(f"ONNX output shapes:")
+            print(f"  actions: {actions_out.shape}")
+            print(f"  joint_pos: {joint_pos_out.shape}")
+            print(f"  joint_vel: {joint_vel_out.shape}")
+            print(f"  body_pos_w: {body_pos_out.shape}")
+            print(f"  body_quat_w: {body_quat_out.shape}")
+            print(f"  anchor_body_index: {self.anchor_body_index}")
+
             # Store action outputs
             self.ref_actions = actions_out.flatten()
 
             # Store reference motion outputs
             self.ref_joint_pos = joint_pos_out.flatten()
             self.ref_joint_vel = joint_vel_out.flatten()
-            self.ref_body_pos_w = body_pos_out  # Shape: (num_bodies, 3)
-            self.ref_body_quat_w = (
-                body_quat_out  # Shape: (num_bodies, 4) in wxyz format
-            )
+            # body_pos_out shape: (num_bodies, 3) - positions for all bodies
+            # body_quat_out shape: (num_bodies, 4) - quaternions for all bodies
+            self.ref_body_pos_w = body_pos_out
+            self.ref_body_quat_w = body_quat_out
 
-            # Extract anchor body pose
+            # Extract anchor body pose (just one body from all bodies)
             self.motion_anchor_pos = self.ref_body_pos_w[self.anchor_body_index].copy()
             self.motion_anchor_quat = self.ref_body_quat_w[
                 self.anchor_body_index
             ].copy()
+
+            print(f"  motion_anchor_pos shape after indexing: {self.motion_anchor_pos.shape}")
+            print(f"  motion_anchor_quat shape after indexing: {self.motion_anchor_quat.shape}")
 
             # Build command from ONNX reference motion (not from NPZ!)
             motion_command = np.concatenate(
