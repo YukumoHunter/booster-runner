@@ -10,6 +10,7 @@ requires-python = ">=3.13"
 dependencies = [
     "evdev>=1.9.2",
     "numpy>=2.3.5",
+    "onnxruntime>=1.23.2",
     "pyyaml>=6.0.3",
     "sshkeyboard>=2.3.1",
     "torch>=2.9.1",

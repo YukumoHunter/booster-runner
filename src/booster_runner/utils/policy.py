@@ -1,16 +1,17 @@
 import numpy as np
 import torch
 
+import onnxruntime
+
 
 class Policy:
     def __init__(self, cfg):
-        try:
-            self.cfg = cfg
-            self.policy = torch.jit.load(self.cfg["policy"]["policy_path"])
-            self.policy.eval()
-        except Exception as e:
-            print(f"Failed to load policy: {e}")
-            raise
+        policy_path = cfg["policy"]["policy_path"]
+        assert policy_path.endswith(".onnx")
+
+        self.cfg = cfg
+        self.inference_session = onnxruntime.InferenceSession(policy_path)
+
         self._init_inference_variables()
 
     def get_policy_interval(self):
@@ -35,6 +36,18 @@ class Policy:
             self.cfg["common"]["dt"] * self.cfg["policy"]["control"]["decimation"]
         )
 
+    # +------------------------------------------------------------+
+    # | Active Observation Terms in Group: 'policy' (shape: (75,)) |
+    # +-----------+----------------------------------+-------------+
+    # |   Index   | Name                             |    Shape    |
+    # +-----------+----------------------------------+-------------+
+    # |     0     | base_ang_vel                     |     (3,)    |
+    # |     1     | projected_gravity                |     (3,)    |
+    # |     2     | joint_pos                        |    (22,)    |
+    # |     3     | joint_vel                        |    (22,)    |
+    # |     4     | actions                          |    (22,)    |
+    # |     5     | command                          |     (3,)    |
+    # +-----------+----------------------------------+-------------+
     def inference(
         self, time_now, dof_pos, dof_vel, base_ang_vel, projected_gravity, vx, vy, vyaw
     ):
@@ -52,47 +65,49 @@ class Policy:
         else:
             self.gait_frequency = self.cfg["policy"]["gait_frequency"]
 
-        self.obs[0:3] = (
+        self.obs[0:3] = base_ang_vel * self.cfg["policy"]["normalization"]["ang_vel"]
+        self.obs[3:6] = (
             projected_gravity * self.cfg["policy"]["normalization"]["gravity"]
         )
-        self.obs[3:6] = base_ang_vel * self.cfg["policy"]["normalization"]["ang_vel"]
-        self.obs[6] = (
+        self.obs[6:28] = (dof_pos - self.default_dof_pos) * self.cfg["policy"][
+            "normalization"
+        ]["dof_pos"]
+        self.obs[28:50] = dof_vel[11:] * self.cfg["policy"]["normalization"]["dof_vel"]
+        self.obs[50:72] = self.actions
+        self.obs[72] = (
             self.smoothed_commands[0]
             * self.cfg["policy"]["normalization"]["lin_vel"]
             * (self.gait_frequency > 1.0e-8)
         )
-        self.obs[7] = (
+        self.obs[73] = (
             self.smoothed_commands[1]
             * self.cfg["policy"]["normalization"]["lin_vel"]
             * (self.gait_frequency > 1.0e-8)
         )
-        self.obs[8] = (
+        self.obs[74] = (
             self.smoothed_commands[2]
             * self.cfg["policy"]["normalization"]["ang_vel"]
             * (self.gait_frequency > 1.0e-8)
         )
-        self.obs[9] = np.cos(2 * np.pi * self.gait_process) * (
-            self.gait_frequency > 1.0e-8
-        )
-        self.obs[10] = np.sin(2 * np.pi * self.gait_process) * (
-            self.gait_frequency > 1.0e-8
-        )
-        self.obs[11:23] = (dof_pos - self.default_dof_pos)[11:] * self.cfg["policy"][
-            "normalization"
-        ]["dof_pos"]
-        self.obs[23:35] = dof_vel[11:] * self.cfg["policy"]["normalization"]["dof_vel"]
-        self.obs[35:47] = self.actions
 
-        self.actions[:] = (
-            self.policy(torch.from_numpy(self.obs).unsqueeze(0)).detach().numpy()
-        )
+        onnx_inputs = {
+            "obs": self.obs.reshape(1, -1).astype(np.float32),
+        }
+
+        self.actions[:] = self.onnx_session.run(
+            output_names=[
+                "joint_pos",
+            ],
+            input_feed=onnx_inputs,
+        )[0]
+
         self.actions[:] = np.clip(
             self.actions,
             -self.cfg["policy"]["normalization"]["clip_actions"],
             self.cfg["policy"]["normalization"]["clip_actions"],
         )
         self.dof_targets[:] = self.default_dof_pos
-        self.dof_targets[11:] += (
+        self.dof_targets += (
             np.array(self.cfg["policy"]["control"]["action_scales"]) * self.actions
         )
 

@@ -11,7 +11,6 @@ from booster_robotics_sdk_python import (
     B1LowStateSubscriber,
     LowCmd,
     LowState,
-    B1JointCnt,
     RobotMode,
 )
 
@@ -52,12 +51,12 @@ class Controller:
     def _init_low_state_values(self):
         self.base_ang_vel = np.zeros(3, dtype=np.float32)
         self.projected_gravity = np.zeros(3, dtype=np.float32)
-        self.dof_pos = np.zeros(B1JointCnt, dtype=np.float32)
-        self.dof_vel = np.zeros(B1JointCnt, dtype=np.float32)
+        self.dof_pos = np.zeros(22, dtype=np.float32)
+        self.dof_vel = np.zeros(22, dtype=np.float32)
 
-        self.dof_target = np.zeros(B1JointCnt, dtype=np.float32)
-        self.filtered_dof_target = np.zeros(B1JointCnt, dtype=np.float32)
-        self.dof_pos_latest = np.zeros(B1JointCnt, dtype=np.float32)
+        self.dof_target = np.zeros(22, dtype=np.float32)
+        self.filtered_dof_target = np.zeros(22, dtype=np.float32)
+        self.dof_pos_latest = np.zeros(22, dtype=np.float32)
 
     def _init_communication(self) -> None:
         try:
@@ -124,7 +123,7 @@ class Controller:
             time.sleep(0.1)
         start_time = time.perf_counter()
         create_prepare_cmd(self.low_cmd, self.cfg)
-        for i in range(B1JointCnt):
+        for i in range(22):
             self.dof_target[i] = self.low_cmd.motor_cmd[i].q
             self.filtered_dof_target[i] = self.low_cmd.motor_cmd[i].q
         self._send_cmd(self.low_cmd)
@@ -190,7 +189,7 @@ class Controller:
             )
 
             motor_cmd = self.low_cmd.motor_cmd
-            for i in range(B1JointCnt):
+            for i in range(22):
                 motor_cmd[i].q = self.filtered_dof_target[i]
 
             # Use series-parallel conversion for torque to avoid non-linearity
