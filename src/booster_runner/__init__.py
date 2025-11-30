@@ -47,7 +47,7 @@ class LowStateBuffers:
 
 class Controller:
     def __init__(
-        self, cfg_file, motion_file, playback_only=False, playback_fps=None
+        self, cfg_file, playback_only=False, playback_fps=None
     ) -> None:
         # Setup logging
         logging.basicConfig(level=logging.INFO)
@@ -60,7 +60,7 @@ class Controller:
         # Initialize components
         self.remoteControlService = RemoteControlService()
         self.policy = Policy(
-            cfg=self.cfg, motion_file_path=motion_file, playback_fps=playback_fps
+            cfg=self.cfg, playback_fps=playback_fps
         )
         self.playback_only = playback_only
         self.playback_fps = playback_fps
@@ -410,12 +410,6 @@ def main():
         "--config", required=True, type=str, help="Name of the configuration file."
     )
     parser.add_argument(
-        "--motion",
-        required=True,
-        type=str,
-        help="Path to motion file (.npz) for tracking",
-    )
-    parser.add_argument(
         "--net",
         type=str,
         default="127.0.0.1",
@@ -436,7 +430,7 @@ def main():
     cfg_file = os.path.join("configs", args.config)
 
     print(f"Starting custom controller, connecting to {args.net} ...")
-    print(f"Loading motion file: {args.motion}")
+    print(f"Motion will be loaded from ONNX model (encoded motion)")
     ChannelFactory.Instance().Init(0, args.net)
 
     if args.playback_only:
@@ -447,7 +441,6 @@ def main():
     try:
         with Controller(
             cfg_file,
-            args.motion,
             playback_only=args.playback_only,
             playback_fps=args.playback_fps,
         ) as controller:

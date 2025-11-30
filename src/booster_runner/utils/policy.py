@@ -2,12 +2,11 @@ import numpy as np
 import onnxruntime
 import torch
 
-from .motion import MotionPlayer
 from .reference_observation import ReferenceObservationBuilder
 
 
 class Policy:
-    def __init__(self, cfg, motion_file_path, playback_fps=None):
+    def __init__(self, cfg, playback_fps=None):
         self.cfg = cfg
         self.playback_fps = playback_fps
         policy_path = self.cfg["policy"]["policy_path"]
@@ -18,6 +17,8 @@ class Policy:
             try:
                 self.onnx_session = onnxruntime.InferenceSession(policy_path)
                 print(f"Loaded ONNX model from {policy_path}")
+                # Extract metadata from ONNX model
+                self._extract_onnx_metadata()
             except Exception as e:
                 print(f"Failed to load ONNX model: {e}")
                 raise
@@ -27,6 +28,10 @@ class Policy:
                 self.policy = torch.jit.load(policy_path)
                 self.policy.eval()
                 print(f"Loaded TorchScript model from {policy_path}")
+                # For TorchScript, use default values
+                self.anchor_body_name = "trunk"
+                self.anchor_body_index = 0
+                self.body_names = []
             except Exception as e:
                 print(f"Failed to load TorchScript model: {e}")
                 raise
@@ -35,21 +40,31 @@ class Policy:
                 f"Unknown model type for {policy_path}. Expected .onnx or .pt"
             )
 
-        # Initialize motion player (required for both model types)
-        anchor_body_index = self.cfg["policy"]["anchor_body_index"]
-        self.motion_player = MotionPlayer(
-            motion_path=motion_file_path,
-            anchor_body_index=anchor_body_index,
-        )
-
-        print(f"Motion player initialized:")
-        print(f"  - Num joints: {self.motion_player.num_joints}")
-        print(f"  - Command dim: {self.motion_player.command_dim}")
-
         self._init_inference_variables()
 
     def get_policy_interval(self):
         return self.policy_interval
+
+    def _extract_onnx_metadata(self):
+        """Extract metadata from ONNX model."""
+        metadata = self.onnx_session.get_modelmeta().custom_metadata_map
+
+        # Extract anchor body name
+        self.anchor_body_name = metadata.get("anchor_body_name", "trunk")
+
+        # Extract body names (comma-separated string)
+        body_names_str = metadata.get("body_names", "")
+        self.body_names = [name.strip() for name in body_names_str.split(",") if name.strip()]
+
+        # Find anchor body index in body_names list
+        if self.anchor_body_name in self.body_names:
+            self.anchor_body_index = self.body_names.index(self.anchor_body_name)
+        else:
+            self.anchor_body_index = 0  # Fallback to trunk
+
+        print(f"ONNX Metadata:")
+        print(f"  - Anchor body: {self.anchor_body_name} (index {self.anchor_body_index})")
+        print(f"  - Body names: {self.body_names}")
 
     def _init_inference_variables(self):
         self.default_dof_pos = np.array(
@@ -63,6 +78,9 @@ class Policy:
         self.obs = np.zeros(self.cfg["policy"]["num_observations"], dtype=np.float32)
         self.raw_actions = np.zeros(self.cfg["policy"]["num_actions"], dtype=np.float32)
         self.actions = np.zeros(self.cfg["policy"]["num_actions"], dtype=np.float32)
+
+        # Add timestep tracking for ONNX motion decoding
+        self.time_step = 0
 
         # Use custom playback FPS if provided, otherwise use policy decimation
         if self.playback_fps is not None:
@@ -109,16 +127,54 @@ class Policy:
         Returns:
             Target joint positions (22 dims)
         """
-        # Get motion command and anchor pose from MotionPlayer
-        motion_command, motion_anchor_pos, self.motion_anchor_quat = (
-            self.motion_player.step(self.policy_interval)
-        )
-        self.motion_anchor_pos[:] = motion_anchor_pos
+        # For ONNX models, extract reference motion from model outputs
+        # For TorchScript, we'll handle it separately (if needed)
+        if self.model_type == "onnx":
+            # First run ONNX to get reference motion
+            onnx_inputs_ref = {
+                "obs": self.obs.reshape(1, -1).astype(np.float32),
+                "time_step": np.array([[self.time_step]], dtype=np.float32),
+            }
+
+            # Request all motion outputs
+            output_names = ["actions", "joint_pos", "joint_vel", "body_pos_w", "body_quat_w"]
+            results = self.onnx_session.run(
+                output_names=output_names,
+                input_feed=onnx_inputs_ref,
+            )
+
+            # Extract outputs
+            actions_out, joint_pos_out, joint_vel_out, body_pos_out, body_quat_out = results
+
+            # Store action outputs
+            self.ref_actions = actions_out.flatten()
+
+            # Store reference motion outputs
+            self.ref_joint_pos = joint_pos_out.flatten()
+            self.ref_joint_vel = joint_vel_out.flatten()
+            self.ref_body_pos_w = body_pos_out  # Shape: (num_bodies, 3)
+            self.ref_body_quat_w = body_quat_out  # Shape: (num_bodies, 4) in wxyz format
+
+            # Extract anchor body pose
+            self.motion_anchor_pos = self.ref_body_pos_w[self.anchor_body_index].copy()
+            self.motion_anchor_quat = self.ref_body_quat_w[self.anchor_body_index].copy()
+
+            # Build command from ONNX reference motion (not from NPZ!)
+            motion_command = np.concatenate([self.ref_joint_pos, self.ref_joint_vel], axis=0)
+
+            # Increment timestep for next inference
+            self.time_step += 1
+        else:
+            # For TorchScript, we need to handle this differently
+            # For now, use zeros (this path needs proper implementation if TorchScript is used)
+            motion_command = np.zeros(self.cfg["policy"]["num_actions"] * 2, dtype=np.float32)
+            self.motion_anchor_pos = np.zeros(3, dtype=np.float32)
+            self.motion_anchor_quat = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
 
         # Assemble observation via shared builder to match simulation exactly
         self.obs[:] = self.obs_builder.build(
             command=motion_command,
-            motion_anchor_pos_w=motion_anchor_pos,
+            motion_anchor_pos_w=self.motion_anchor_pos,
             motion_anchor_quat_w=self.motion_anchor_quat,
             robot_anchor_pos_w=base_pos_w,
             robot_anchor_quat_w=base_quat,
@@ -135,23 +191,12 @@ class Policy:
             self.actions[:] = (
                 self.policy(torch.from_numpy(self.obs).unsqueeze(0)).detach().numpy()
             )
+            self.raw_actions[:] = self.actions.copy()
         else:  # onnx
-            # ONNX inference
-            onnx_inputs = {
-                "obs": self.obs.reshape(1, -1).astype(np.float32),
-                "time_step": np.array(
-                    [[self.motion_player._frame_idx]], dtype=np.float32
-                ),
-            }
-
-            results = self.onnx_session.run(
-                output_names=["actions"],
-                input_feed=onnx_inputs,
-            )
-
-            # Extract actions (first output)
-            self.actions[:] = results[0].flatten()
-            self.raw_actions[:] = results[0].flatten().copy()
+            # For ONNX, we already extracted actions when getting reference motion above
+            # So we just use those actions
+            self.actions[:] = self.ref_actions
+            self.raw_actions[:] = self.ref_actions.copy()
 
         # Clip actions
         self.actions[:] = np.clip(
@@ -169,25 +214,59 @@ class Policy:
         return self.dof_targets
 
     def get_reference_motion(self) -> np.ndarray:
-        """Get reference motion directly without running policy inference.
+        """Get reference motion directly from ONNX without running policy.
 
         Returns:
-            Target joint positions from reference motion (22 dims)
+            Target joint positions from ONNX encoded motion (22 dims)
         """
-        # Get motion command from MotionPlayer (44 dims: 22 pos + 22 vel)
-        motion_command, _, _ = self.motion_player.step(self.policy_interval)
+        if self.model_type == "onnx":
+            # Run ONNX to get reference motion only
+            onnx_inputs = {
+                "obs": np.zeros((1, self.cfg["policy"]["num_observations"]), dtype=np.float32),
+                "time_step": np.array([[self.time_step]], dtype=np.float32),
+            }
 
-        # Extract joint positions (first 22 elements)
-        reference_joint_pos = motion_command[:22]
+            results = self.onnx_session.run(
+                output_names=["joint_pos"],
+                input_feed=onnx_inputs,
+            )
 
-        return reference_joint_pos
+            self.time_step += 1
+            return results[0].flatten()
+        else:
+            # For TorchScript, return zeros (needs proper implementation)
+            return np.zeros(self.cfg["policy"]["num_actions"], dtype=np.float32)
 
     def get_first_frame_motion(self) -> np.ndarray:
-        """Get the first frame of reference motion without advancing the player.
+        """Get the first frame of reference motion from ONNX.
 
         Returns:
             Joint positions from frame 0 (22 dims)
         """
-        # Access frame 0 directly without calling step()
-        first_frame_pos = self.motion_player._joint_pos[0]
-        return first_frame_pos.copy()
+        if self.model_type == "onnx":
+            # Reset timestep to 0 and get first frame
+            saved_timestep = self.time_step
+            self.time_step = 0
+
+            onnx_inputs = {
+                "obs": np.zeros((1, self.cfg["policy"]["num_observations"]), dtype=np.float32),
+                "time_step": np.array([[0]], dtype=np.float32),
+            }
+
+            results = self.onnx_session.run(
+                output_names=["joint_pos"],
+                input_feed=onnx_inputs,
+            )
+
+            # Restore timestep (don't increment)
+            self.time_step = saved_timestep
+            return results[0].flatten()
+        else:
+            # For TorchScript, return default positions
+            return self.default_dof_pos.copy()
+
+    def reset(self):
+        """Reset policy state and timestep counter."""
+        self.time_step = 0
+        self.raw_actions[:] = 0
+        self.actions[:] = 0

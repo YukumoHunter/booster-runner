@@ -42,8 +42,8 @@ policy:
   policy_path: "./models/test-motion.onnx"
   num_actions: 22
   num_observations: 125
-  motion_file: ""  # Set via --motion command-line argument
-  anchor_body_index: 0  # Trunk body
+  # Note: motion_file and anchor_body_index are no longer needed
+  # Reference motion and anchor body info are now extracted from ONNX model metadata
 
   normalization:
     gravity: 1.0
