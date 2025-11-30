@@ -3,6 +3,7 @@ import time
 import yaml
 import logging
 import threading
+from dataclasses import dataclass
 
 from booster_robotics_sdk_python import (
     ChannelFactory,
@@ -20,6 +21,28 @@ from .utils.remote_control_service import RemoteControlService
 from .utils.rotate import quat_conjugate, quat_rotate_vector, rotate_vector_inverse_rpy
 from .utils.timer import TimerConfig, Timer
 from .utils.policy import Policy
+
+
+@dataclass
+class MotorStateBuffer:
+    q: np.ndarray
+    dq: np.ndarray
+    ddq: np.ndarray
+    tau_est: np.ndarray
+
+
+@dataclass
+class ImuStateBuffer:
+    rpy: np.ndarray
+    gyro: np.ndarray
+    acc: np.ndarray
+
+
+@dataclass
+class LowStateBuffers:
+    imu: ImuStateBuffer
+    motor_state_serial: MotorStateBuffer
+    motor_state_parallel: MotorStateBuffer
 
 
 class Controller:
@@ -72,6 +95,45 @@ class Controller:
         self.filtered_dof_target = np.zeros(22, dtype=np.float32)
         self.dof_pos_latest = np.zeros(22, dtype=np.float32)
         self._last_state_time = None
+        self.low_state_buffers: LowStateBuffers | None = None
+
+    def _create_motor_state_buffer(self, length: int) -> MotorStateBuffer:
+        return MotorStateBuffer(
+            q=np.zeros(length, dtype=np.float32),
+            dq=np.zeros(length, dtype=np.float32),
+            ddq=np.zeros(length, dtype=np.float32),
+            tau_est=np.zeros(length, dtype=np.float32),
+        )
+
+    def _ensure_low_state_buffers(self, low_state_msg: LowState) -> LowStateBuffers:
+        serial_count = len(low_state_msg.motor_state_serial)
+        parallel_count = len(low_state_msg.motor_state_parallel)
+
+        if self.low_state_buffers is not None:
+            serial_mismatch = (
+                self.low_state_buffers.motor_state_serial.q.shape[0] != serial_count
+            )
+            parallel_mismatch = (
+                self.low_state_buffers.motor_state_parallel.q.shape[0] != parallel_count
+            )
+            if serial_mismatch or parallel_mismatch:
+                self.low_state_buffers = None
+
+        if self.low_state_buffers is None:
+            self.low_state_buffers = LowStateBuffers(
+                imu=ImuStateBuffer(
+                    rpy=np.zeros(3, dtype=np.float32),
+                    gyro=np.zeros(3, dtype=np.float32),
+                    acc=np.zeros(3, dtype=np.float32),
+                ),
+                motor_state_serial=self._create_motor_state_buffer(serial_count),
+                motor_state_parallel=self._create_motor_state_buffer(parallel_count),
+            )
+        return self.low_state_buffers
+
+    def get_low_state_buffers(self) -> LowStateBuffers | None:
+        """Expose the cached low state buffers for diagnostics or logging."""
+        return self.low_state_buffers
 
     def _init_communication(self) -> None:
         try:
@@ -99,22 +161,43 @@ class Controller:
             )
             self.running = False
         self.running = True
+        buffers = self._ensure_low_state_buffers(low_state_msg)
+
+        # Cache IMU feedback
+        buffers.imu.rpy[:] = np.array(low_state_msg.imu_state.rpy, dtype=np.float32)
+        buffers.imu.gyro[:] = np.array(low_state_msg.imu_state.gyro, dtype=np.float32)
+        buffers.imu.acc[:] = np.array(low_state_msg.imu_state.acc, dtype=np.float32)
+
+        # Cache motor state feedback
+        serial_buffer = buffers.motor_state_serial
+        for i, motor in enumerate(low_state_msg.motor_state_serial):
+            serial_buffer.q[i] = motor.q
+            serial_buffer.dq[i] = motor.dq
+            serial_buffer.ddq[i] = motor.ddq
+            serial_buffer.tau_est[i] = motor.tau_est
+
+        parallel_buffer = buffers.motor_state_parallel
+        for i, motor in enumerate(low_state_msg.motor_state_parallel):
+            parallel_buffer.q[i] = motor.q
+            parallel_buffer.dq[i] = motor.dq
+            parallel_buffer.ddq[i] = motor.ddq
+            parallel_buffer.tau_est[i] = motor.tau_est
+
+        joint_count = min(serial_buffer.q.shape[0], self.dof_pos_latest.shape[0])
+        self.dof_pos_latest[:joint_count] = serial_buffer.q[:joint_count]
+
         self.timer.tick_timer_if_sim()
         time_now = self.timer.get_time()
-        for i, motor in enumerate(low_state_msg.motor_state_serial):
-            self.dof_pos_latest[i] = motor.q
         if time_now >= self.next_inference_time:
             self.projected_gravity[:] = rotate_vector_inverse_rpy(
-                low_state_msg.imu_state.rpy[0],
-                low_state_msg.imu_state.rpy[1],
-                low_state_msg.imu_state.rpy[2],
+                buffers.imu.rpy[0],
+                buffers.imu.rpy[1],
+                buffers.imu.rpy[2],
                 np.array([0.0, 0.0, -1.0]),
             )
-            self.base_ang_vel[:] = np.array(
-                low_state_msg.imu_state.gyro, dtype=np.float32
-            )
+            self.base_ang_vel[:] = buffers.imu.gyro
 
-            rpy = low_state_msg.imu_state.rpy
+            rpy = buffers.imu.rpy
 
             def rpy_to_quat(roll, pitch, yaw):
                 cy = np.cos(yaw * 0.5)
@@ -139,7 +222,7 @@ class Controller:
                 dt = max(1e-4, time_now - self._last_state_time)
             self._last_state_time = time_now
 
-            acc_b = np.array(low_state_msg.imu_state.acc, dtype=np.float32)
+            acc_b = buffers.imu.acc
             acc_w = quat_rotate_vector(self.base_quat, acc_b)
             lin_acc_w = acc_w - self._gravity_w
             self._base_lin_vel_w += lin_acc_w * dt
@@ -151,9 +234,8 @@ class Controller:
                 quat_conjugate(self.base_quat), self._base_lin_vel_w
             )
 
-            for i, motor in enumerate(low_state_msg.motor_state_serial):
-                self.dof_pos[i] = motor.q
-                self.dof_vel[i] = motor.dq
+            self.dof_pos[:joint_count] = serial_buffer.q[:joint_count]
+            self.dof_vel[:joint_count] = serial_buffer.dq[:joint_count]
 
     def _send_cmd(self, cmd: LowCmd):
         self.low_cmd_publisher.Write(cmd)

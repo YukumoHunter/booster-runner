@@ -85,15 +85,6 @@ class Policy:
             obs_dim=self.cfg["policy"]["num_observations"],
         )
 
-        # ONNX-specific output storage (for future use)
-        if self.model_type == "onnx":
-            self.last_joint_pos = np.zeros(22, dtype=np.float32)
-            self.last_joint_vel = np.zeros(22, dtype=np.float32)
-            self.last_body_pos_w = np.zeros((25, 3), dtype=np.float32)
-            self.last_body_quat_w = np.zeros((25, 4), dtype=np.float32)
-            self.last_body_lin_vel_w = np.zeros((25, 3), dtype=np.float32)
-            self.last_body_ang_vel_w = np.zeros((25, 3), dtype=np.float32)
-
     def inference(
         self,
         time_now: float,
@@ -146,7 +137,6 @@ class Policy:
             )
         else:  # onnx
             # ONNX inference
-            print("obs:", self.obs.reshape(1, -1).astype(np.float32))
             onnx_inputs = {
                 "obs": self.obs.reshape(1, -1).astype(np.float32),
                 "time_step": np.array(
@@ -155,29 +145,13 @@ class Policy:
             }
 
             results = self.onnx_session.run(
-                output_names=[
-                    "actions",
-                    "joint_pos",
-                    "joint_vel",
-                    "body_pos_w",
-                    "body_quat_w",
-                    "body_lin_vel_w",
-                    "body_ang_vel_w",
-                ],
+                output_names=["actions"],
                 input_feed=onnx_inputs,
             )
 
             # Extract actions (first output)
             self.actions[:] = results[0].flatten()
             self.raw_actions[:] = results[0].flatten().copy()
-
-            # Store other outputs for future use
-            self.last_joint_pos[:] = results[1].flatten()
-            self.last_joint_vel[:] = results[2].flatten()
-            self.last_body_pos_w[:] = results[3].squeeze(0)
-            self.last_body_quat_w[:] = results[4].squeeze(0)
-            self.last_body_lin_vel_w[:] = results[5].squeeze(0)
-            self.last_body_ang_vel_w[:] = results[6].squeeze(0)
 
         # Clip actions
         self.actions[:] = np.clip(
@@ -217,21 +191,3 @@ class Policy:
         # Access frame 0 directly without calling step()
         first_frame_pos = self.motion_player._joint_pos[0]
         return first_frame_pos.copy()
-
-    def get_onnx_outputs(self):
-        """Return last ONNX inference outputs for debugging/logging.
-
-        Returns:
-            dict or None: Dictionary containing ONNX outputs if using ONNX model,
-                         None if using TorchScript model.
-        """
-        if self.model_type != "onnx":
-            return None
-        return {
-            "joint_pos": self.last_joint_pos.copy(),
-            "joint_vel": self.last_joint_vel.copy(),
-            "body_pos_w": self.last_body_pos_w.copy(),
-            "body_quat_w": self.last_body_quat_w.copy(),
-            "body_lin_vel_w": self.last_body_lin_vel_w.copy(),
-            "body_ang_vel_w": self.last_body_ang_vel_w.copy(),
-        }
