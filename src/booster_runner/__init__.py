@@ -18,6 +18,7 @@ from booster_robotics_sdk_python import (
 
 from .utils.command import create_prepare_cmd, create_first_frame_rl_cmd
 from .utils.remote_control_service import RemoteControlService
+from .utils.pose_filter import BasePoseFilter
 from .utils.rotate import quat_conjugate, quat_rotate_vector, rotate_vector_inverse_rpy
 from .utils.timer import TimerConfig, Timer
 from .utils.policy import Policy
@@ -92,6 +93,7 @@ class Controller:
         self.dof_pos_latest = np.zeros(22, dtype=np.float32)
         self._last_state_time = None
         self.low_state_buffers: LowStateBuffers | None = None
+        self.pose_filter = BasePoseFilter(dt=self.cfg["common"]["dt"])
 
     def _create_motor_state_buffer(self, length: int) -> MotorStateBuffer:
         return MotorStateBuffer(
@@ -221,11 +223,19 @@ class Controller:
             acc_b = buffers.imu.acc
             acc_w = quat_rotate_vector(self.base_quat, acc_b)
             lin_acc_w = acc_w - self._gravity_w
-            self._base_lin_vel_w += lin_acc_w * dt
+            self.pose_filter.predict(lin_acc_w)
+
+            gyro_norm = np.linalg.norm(buffers.imu.gyro)
+            acc_norm = np.linalg.norm(lin_acc_w)
+            if gyro_norm < 0.15 and acc_norm < 0.25:
+                self.pose_filter.update_stationary(lin_acc_w)
+
+            self._base_lin_vel_w[:] = self.pose_filter.velocity
             vel_norm = np.linalg.norm(self._base_lin_vel_w)
             if vel_norm > 5.0:
                 self._base_lin_vel_w *= 5.0 / vel_norm
-            self.base_pos_w += self._base_lin_vel_w * dt
+
+            self.base_pos_w[:] = self.pose_filter.position
             self.base_lin_vel[:] = quat_rotate_vector(
                 quat_conjugate(self.base_quat), self._base_lin_vel_w
             )
@@ -274,6 +284,7 @@ class Controller:
                 break
             time.sleep(0.1)
 
+        self.policy.reset()
         # Get first frame of reference motion
         first_frame_motion = self.policy.get_first_frame_motion()
 
@@ -330,7 +341,7 @@ class Controller:
                 time_now=time_now,
                 dof_pos=self.dof_pos,
                 dof_vel=self.dof_vel,
-                # base_lin_vel=self.base_lin_vel,
+                base_lin_vel=self.base_lin_vel,
                 base_ang_vel=self.base_ang_vel,
                 base_quat=self.base_quat,
                 base_pos_w=self.base_pos_w,

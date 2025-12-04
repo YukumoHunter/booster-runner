@@ -1,8 +1,16 @@
+from __future__ import annotations
+
 import numpy as np
 import onnxruntime
 import torch
 
 from .reference_observation import ReferenceObservationBuilder
+from .rotate import (
+    quat_from_yaw,
+    quat_to_rotation_matrix,
+    quat_yaw,
+    rotation_matrix_to_quat,
+)
 
 
 class Policy:
@@ -106,13 +114,53 @@ class Policy:
             default_joint_vel=self.default_dof_vel,
             obs_dim=self.cfg["policy"]["num_observations"],
         )
+        self.motion_anchor_pos: np.ndarray | None = None
+        self.motion_anchor_quat: np.ndarray | None = None
+        self._reset_motion_alignment()
+
+    def _reset_motion_alignment(self):
+        self._alignment_ready = False
+        self._world_to_init_rot = np.eye(3, dtype=np.float32)
+        self._world_to_init_trans = np.zeros(3, dtype=np.float32)
+
+    def _maybe_initialize_motion_alignment(
+        self, robot_anchor_pos_w: np.ndarray, robot_anchor_quat_w: np.ndarray
+    ) -> None:
+        if self._alignment_ready:
+            return
+        if self.motion_anchor_pos is None or self.motion_anchor_quat is None:
+            return
+
+        robot_yaw = quat_yaw(robot_anchor_quat_w)
+        motion_yaw = quat_yaw(self.motion_anchor_quat)
+
+        R_world_anchor = quat_to_rotation_matrix(quat_from_yaw(robot_yaw))
+        R_init_anchor = quat_to_rotation_matrix(quat_from_yaw(motion_yaw))
+
+        self._world_to_init_rot = (R_world_anchor @ R_init_anchor.T).astype(np.float32)
+        self._world_to_init_trans = (
+            robot_anchor_pos_w - self._world_to_init_rot @ self.motion_anchor_pos
+        ).astype(np.float32)
+        self._alignment_ready = True
+
+    def _transform_motion_position(self, pos_w: np.ndarray) -> np.ndarray:
+        if not self._alignment_ready:
+            return pos_w
+        return (self._world_to_init_rot @ pos_w) + self._world_to_init_trans
+
+    def _transform_motion_orientation(self, quat_w: np.ndarray) -> np.ndarray:
+        if not self._alignment_ready:
+            return quat_w
+        rot = quat_to_rotation_matrix(quat_w)
+        aligned_rot = self._world_to_init_rot @ rot
+        return rotation_matrix_to_quat(aligned_rot)
 
     def inference(
         self,
         time_now: float,
         dof_pos: np.ndarray,
         dof_vel: np.ndarray,
-        # base_lin_vel: np.ndarray,
+        base_lin_vel: np.ndarray,
         base_ang_vel: np.ndarray,
         base_quat: np.ndarray,
         base_pos_w: np.ndarray,
@@ -184,8 +232,12 @@ class Policy:
                 self.anchor_body_index
             ].copy()
 
-            print(f"  motion_anchor_pos shape after indexing: {self.motion_anchor_pos.shape}")
-            print(f"  motion_anchor_quat shape after indexing: {self.motion_anchor_quat.shape}")
+            print(
+                f"  motion_anchor_pos shape after indexing: {self.motion_anchor_pos.shape}"
+            )
+            print(
+                f"  motion_anchor_quat shape after indexing: {self.motion_anchor_quat.shape}"
+            )
 
             # Build command from ONNX reference motion (not from NPZ!)
             motion_command = np.concatenate(
@@ -203,14 +255,24 @@ class Policy:
             self.motion_anchor_pos = np.zeros(3, dtype=np.float32)
             self.motion_anchor_quat = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
 
+        # Align the first motion frame with the measured robot pose
+        self._maybe_initialize_motion_alignment(
+            robot_anchor_pos_w=base_pos_w, robot_anchor_quat_w=base_quat
+        )
+
+        aligned_anchor_pos = self._transform_motion_position(self.motion_anchor_pos)
+        aligned_anchor_quat = self._transform_motion_orientation(
+            self.motion_anchor_quat
+        )
+
         # Assemble observation via shared builder to match simulation exactly
         self.obs[:] = self.obs_builder.build(
             command=motion_command,
-            motion_anchor_pos_w=self.motion_anchor_pos,
-            motion_anchor_quat_w=self.motion_anchor_quat,
+            motion_anchor_pos_w=aligned_anchor_pos,
+            motion_anchor_quat_w=aligned_anchor_quat,
             robot_anchor_pos_w=base_pos_w,
             robot_anchor_quat_w=base_quat,
-            # base_lin_vel_b=base_lin_vel,
+            base_lin_vel_b=base_lin_vel,
             base_ang_vel_b=base_ang_vel,
             joint_pos=dof_pos,
             joint_vel=dof_vel,
@@ -306,3 +368,6 @@ class Policy:
         self.time_step = 0
         self.raw_actions[:] = 0
         self.actions[:] = 0
+        self.motion_anchor_pos = None
+        self.motion_anchor_quat = None
+        self._reset_motion_alignment()

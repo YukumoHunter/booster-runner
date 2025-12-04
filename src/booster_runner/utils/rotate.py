@@ -119,3 +119,63 @@ def rotation_matrix_to_6d(R: np.ndarray) -> np.ndarray:
         6D vector (first 2 columns of R flattened)
     """
     return R[:, :2].reshape(-1)
+
+
+def quat_normalize(q: np.ndarray) -> np.ndarray:
+    """Return a normalized copy of the quaternion."""
+
+    norm = np.linalg.norm(q)
+    if norm < 1e-12:
+        return np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    return (q / norm).astype(np.float32)
+
+
+def quat_from_yaw(yaw: float) -> np.ndarray:
+    """Construct a quaternion representing a pure yaw rotation."""
+
+    half = 0.5 * yaw
+    return np.array([np.cos(half), 0.0, 0.0, np.sin(half)], dtype=np.float32)
+
+
+def quat_yaw(q: np.ndarray) -> float:
+    """Extract the yaw angle from a quaternion."""
+
+    w, x, y, z = quat_normalize(q)
+    return np.arctan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+
+
+def rotation_matrix_to_quat(R: np.ndarray) -> np.ndarray:
+    """Convert a rotation matrix back to a quaternion [w, x, y, z]."""
+
+    m00, m01, m02 = R[0, 0], R[0, 1], R[0, 2]
+    m10, m11, m12 = R[1, 0], R[1, 1], R[1, 2]
+    m20, m21, m22 = R[2, 0], R[2, 1], R[2, 2]
+
+    trace = m00 + m11 + m22
+    if trace > 0.0:
+        s = 0.5 / np.sqrt(trace + 1.0)
+        w = 0.25 / s
+        x = (m21 - m12) * s
+        y = (m02 - m20) * s
+        z = (m10 - m01) * s
+    elif m00 > m11 and m00 > m22:
+        s = 2.0 * np.sqrt(1.0 + m00 - m11 - m22)
+        w = (m21 - m12) / s
+        x = 0.25 * s
+        y = (m01 + m10) / s
+        z = (m02 + m20) / s
+    elif m11 > m22:
+        s = 2.0 * np.sqrt(1.0 + m11 - m00 - m22)
+        w = (m02 - m20) / s
+        x = (m01 + m10) / s
+        y = 0.25 * s
+        z = (m12 + m21) / s
+    else:
+        s = 2.0 * np.sqrt(1.0 + m22 - m00 - m11)
+        w = (m10 - m01) / s
+        x = (m02 + m20) / s
+        y = (m12 + m21) / s
+        z = 0.25 * s
+
+    quat = np.array([w, x, y, z], dtype=np.float32)
+    return quat_normalize(quat)

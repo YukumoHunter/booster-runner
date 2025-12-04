@@ -134,7 +134,7 @@ class ReferenceObservationBuilder:
         motion_anchor_quat_w: np.ndarray,
         robot_anchor_pos_w: np.ndarray,
         robot_anchor_quat_w: np.ndarray,
-        # base_lin_vel_b: np.ndarray,
+        base_lin_vel_b: np.ndarray,
         base_ang_vel_b: np.ndarray,
         joint_pos: np.ndarray,
         joint_vel: np.ndarray,
@@ -185,9 +185,9 @@ class ReferenceObservationBuilder:
             quat_to_rotation_matrix(rel_quat_b)
         )
 
-        # obs[self._slices["base_lin_vel"]] = _as_float_array(
-        #     base_lin_vel_b, 3, "base_lin_vel_b"
-        # )
+        obs[self._slices["base_lin_vel"]] = _as_float_array(
+            base_lin_vel_b, 3, "base_lin_vel_b"
+        )
         obs[self._slices["base_ang_vel"]] = _as_float_array(
             base_ang_vel_b, 3, "base_ang_vel_b"
         )
